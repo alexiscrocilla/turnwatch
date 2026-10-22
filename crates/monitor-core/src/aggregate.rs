@@ -45,6 +45,9 @@ const MS_PER_HOUR: i64 = 3_600_000;
 const FILETIME_UNIX_OFFSET_MS: i64 = 11_644_473_600_000;
 /// Desktop shows an error for 7 days.
 const ERROR_WINDOW_MS: i64 = 7 * 24 * MS_PER_HOUR;
+/// A Desktop session without a live process is considered when its latest
+/// turn or activity is this recent.
+pub const STOPPED_WINDOW_MS: i64 = ERROR_WINDOW_MS;
 /// Slack between two sources stamping the same moment (Desktop writes its
 /// turn edge a few milliseconds before or after the transcript's marker).
 const CLOCK_SLACK_MS: i64 = 5_000;
@@ -72,16 +75,31 @@ pub fn session_key(entry: &RegistryEntry) -> String {
 }
 
 /// Joins registry, Desktop, transcript and git/PR data into the sorted list
-/// of visible sessions, with their counts.
+/// of visible sessions, with their counts. Desktop sessions whose process
+/// Desktop stopped ([`stopped_sessions`]) are listed only while they need
+/// the person: waiting, error or unseen.
 pub fn build_snapshot(input: &AggregateInput) -> Snapshot {
     let candidates = select_candidates(input);
     let titles = PeerTitles::new(input.desktop, &candidates);
     let cutoff = message_cutoff(input.now_ms, input.settings.message_window_hours);
     let inbound = inbound_by_target(input.desktop, cutoff, &titles);
-    let mut sessions: Vec<SessionView> = candidates
+    let registry_ok = input.health.registry_ok;
+    let stopped: Vec<(String, RegistryEntry)> =
+        stopped_sessions(input.now_ms, input.registry, registry_ok, input.desktop)
+            .into_iter()
+            .map(|d| {
+                let entry = stopped_entry(d);
+                (session_key(&entry), entry)
+            })
+            .collect();
+    let live_views = candidates.iter().filter_map(|(key, entry)| {
+        build_view(input, key, entry, false, cutoff, &titles, &inbound)
+    });
+    let stopped_views = stopped
         .iter()
-        .filter_map(|(key, entry)| build_view(input, key, entry, cutoff, &titles, &inbound))
-        .collect();
+        .filter_map(|(key, entry)| build_view(input, key, entry, true, cutoff, &titles, &inbound))
+        .filter(|view| needs_person(view.state));
+    let mut sessions: Vec<SessionView> = live_views.chain(stopped_views).collect();
     sort_sessions(&mut sessions);
     let counts = count_sessions(&sessions);
     Snapshot {
@@ -555,6 +573,68 @@ fn is_ghost(entry: &RegistryEntry, is_desktop: bool, desktop: Option<&DesktopSes
     is_desktop && idle && unused && non_blank(entry.name.as_deref()).is_none()
 }
 
+/// Desktop sessions without a live process whose state is worth working
+/// out: not archived, active within [`STOPPED_WINDOW_MS`], and no live entry
+/// (whatever its kind) runs them, by Desktop id or by CLI id. Desktop keeps
+/// only a few processes alive and stops idle ones beyond that or under
+/// memory pressure, so a session can lose its process while it still waits
+/// for the person. Sorted by Desktop id. None while the registry was never
+/// read (`registry_ok` false and nothing kept from an earlier read): every
+/// session would look stopped.
+pub fn stopped_sessions<'a>(
+    now_ms: i64,
+    registry: &[RegistryEntry],
+    registry_ok: bool,
+    desktop: &'a HashMap<String, DesktopSession>,
+) -> Vec<&'a DesktopSession> {
+    if !registry_ok && registry.is_empty() {
+        return Vec::new();
+    }
+    let live_hosts: HashSet<&str> = registry
+        .iter()
+        .filter_map(|e| non_blank(e.host_session_id.as_deref()))
+        .collect();
+    let live_clis: HashSet<&str> = registry
+        .iter()
+        .filter_map(|e| non_blank(Some(e.session_id.as_str())))
+        .collect();
+    let since = now_ms.saturating_sub(STOPPED_WINDOW_MS);
+    let mut stopped: Vec<&DesktopSession> = desktop
+        .values()
+        .filter(|d| {
+            let host = d.host_session_id.trim();
+            let recent = d.last_turn_edge_at.max(d.last_activity_at).is_some_and(|at| at >= since);
+            !host.is_empty()
+                && !d.is_archived
+                && recent
+                && !live_hosts.contains(host)
+                && non_blank(d.cli_session_id.as_deref()).is_none_or(|cli| !live_clis.contains(cli))
+        })
+        .collect();
+    stopped.sort_by(|a, b| a.host_session_id.cmp(&b.host_session_id));
+    stopped
+}
+
+/// Stand-in registry entry for a stopped Desktop session: no process, no
+/// status, the transcript found through Desktop's CLI id.
+fn stopped_entry(desktop: &DesktopSession) -> RegistryEntry {
+    RegistryEntry {
+        session_id: clean(desktop.cli_session_id.as_deref()).unwrap_or_default(),
+        cwd: desktop.cwd.clone().unwrap_or_default(),
+        entrypoint: Some(DESKTOP_ENTRYPOINT.to_owned()),
+        host_session_id: Some(desktop.host_session_id.trim().to_owned()),
+        ..RegistryEntry::default()
+    }
+}
+
+/// States a stopped session is listed in.
+fn needs_person(state: SessionState) -> bool {
+    matches!(
+        state,
+        SessionState::Waiting | SessionState::Error | SessionState::Unseen
+    )
+}
+
 // ---------------------------------------------------------------------------
 // One session
 // ---------------------------------------------------------------------------
@@ -594,11 +674,13 @@ impl<'a> PeerTitles<'a> {
 }
 
 /// Builds the view of one candidate, or None when it must stay hidden
-/// (archived in Desktop, or a pre-warmed ghost).
+/// (archived in Desktop, or a pre-warmed ghost). `stopped`: `entry` stands
+/// in for a process Desktop stopped ([`stopped_entry`]).
 fn build_view(
     input: &AggregateInput,
     key: &str,
     entry: &RegistryEntry,
+    stopped: bool,
     cutoff: i64,
     titles: &PeerTitles,
     inbound: &HashMap<&str, Vec<PeerLink>>,
@@ -651,6 +733,7 @@ fn build_view(
         cli_session_id: entry.session_id.clone(),
         pid: entry.pid,
         is_desktop,
+        stopped,
         title,
         project,
         cwd,
@@ -1150,7 +1233,11 @@ mod tests {
                 acks: HashMap::new(),
                 turn_ended: HashMap::new(),
                 settings: Settings::default(),
-                health: SourceHealth::default(),
+                health: SourceHealth {
+                    registry_ok: true,
+                    desktop_ok: true,
+                    ..SourceHealth::default()
+                },
             }
         }
 
@@ -2254,6 +2341,152 @@ mod tests {
         );
     }
 
+    // --- stopped sessions --------------------------------------------------
+
+    /// The Desktop file of a session without a live process, whose latest
+    /// turn ended after the person last looked at it.
+    fn stopped_unseen(host: &str) -> DesktopSession {
+        DesktopSession {
+            cli_session_id: Some(format!("cli-{host}")),
+            cwd: Some(REPO_CWD.to_owned()),
+            last_turn_edge_at: Some(NOW - 30 * MIN),
+            last_focused_at: Some(NOW - 40 * MIN),
+            ..desk(host)
+        }
+    }
+
+    #[test]
+    fn stopped_sessions_are_recent_unarchived_and_without_process() {
+        let old = NOW - STOPPED_WINDOW_MS - MIN;
+        let mut f = Fixture::new();
+        f.file(stopped_unseen("local_s"))
+            .file(DesktopSession {
+                is_archived: true,
+                ..stopped_unseen("local_archived")
+            })
+            .file(DesktopSession {
+                last_turn_edge_at: Some(old),
+                last_focused_at: Some(old - MIN),
+                ..stopped_unseen("local_old")
+            })
+            // An old turn, but recent activity.
+            .file(DesktopSession {
+                last_turn_edge_at: Some(old),
+                last_activity_at: Some(NOW - HOUR),
+                ..stopped_unseen("local_active")
+            })
+            // Run by a live process, found by Desktop id or by CLI id.
+            .live(entry(1, "local_live"))
+            .file(stopped_unseen("local_live"))
+            .live(RegistryEntry {
+                session_id: "cli-local_resumed".to_owned(),
+                ..cli(2)
+            })
+            .file(stopped_unseen("local_resumed"));
+        let ids = |registry: &[RegistryEntry], registry_ok: bool| -> Vec<String> {
+            stopped_sessions(NOW, registry, registry_ok, &f.desktop)
+                .iter()
+                .map(|d| d.host_session_id.clone())
+                .collect()
+        };
+        assert_eq!(ids(&f.registry, true), ["local_active", "local_s"]);
+        // A failed read keeps the previous entries: still known.
+        assert_eq!(ids(&f.registry, false), ["local_active", "local_s"]);
+        // Never read: every session would look stopped.
+        assert!(ids(&[], false).is_empty());
+        assert_eq!(
+            ids(&[], true),
+            ["local_active", "local_live", "local_resumed", "local_s"],
+            "no process at all"
+        );
+    }
+
+    #[test]
+    fn stopped_sessions_are_listed_only_when_they_need_the_person() {
+        let mut f = Fixture::new();
+        f.live(entry(1, "local_live")).file(desk("local_live"));
+        f.file(stopped_unseen("local_unseen"));
+        // Seen after its latest turn: idle, hidden.
+        f.file(DesktopSession {
+            last_focused_at: Some(NOW - 20 * MIN),
+            ..stopped_unseen("local_seen")
+        });
+        // Seen, but its turn ended on a question.
+        f.file(DesktopSession {
+            last_focused_at: Some(NOW - 5 * MIN),
+            ..stopped_unseen("local_asked")
+        });
+        f.transcripts.insert("cli-local_asked".to_owned(), asked());
+        // Seen, but its turn ended on an error.
+        f.file(DesktopSession {
+            last_focused_at: Some(NOW - 5 * MIN),
+            error: error_at(NOW - 30 * MIN, "rate_limit: Limite atteinte"),
+            ..stopped_unseen("local_failed")
+        });
+        assert_eq!(
+            f.sorted_keys(),
+            ["local_asked", "local_failed", "local_live", "local_unseen"]
+        );
+        assert_eq!(f.snapshot().counts.waiting, 1);
+
+        let asked = f.view("local_asked");
+        assert_eq!(asked.state, Waiting);
+        assert_eq!(asked.waiting_for.as_deref(), Some(WAITING_DECISION));
+        assert_eq!(asked.question.map(|q| q.options.len()), Some(2));
+        assert!(asked.stopped && asked.is_desktop);
+        assert_eq!(asked.pid, 0);
+        assert_eq!(asked.host_session_id.as_deref(), Some("local_asked"));
+        assert_eq!(asked.cli_session_id, "cli-local_asked");
+        assert_eq!(asked.cwd, REPO_CWD);
+        assert_eq!(asked.project, "atlas-web");
+        assert_eq!(asked.title, "Desktop local_asked");
+        assert_eq!(asked.version, None);
+        let failed = f.view("local_failed");
+        assert_eq!(failed.state, Error);
+        assert_eq!(failed.last_error.as_deref(), Some("rate_limit: Limite atteinte"));
+        let unseen = f.view("local_unseen");
+        assert_eq!((unseen.state, unseen.state_since), (Unseen, Some(NOW - 30 * MIN)));
+        assert!(!f.view("local_live").stopped);
+
+        // Acknowledged in the monitor: hidden again.
+        f.acks.insert("local_unseen".to_owned(), NOW - MIN);
+        assert!(!f.keys().contains(&"local_unseen".to_owned()));
+    }
+
+    #[test]
+    fn a_session_keeps_its_card_when_desktop_stops_its_process() {
+        let mut f = Fixture::new();
+        f.live(RegistryEntry {
+            session_id: "cli-local_a".to_owned(),
+            ..entry(1, "local_a")
+        })
+        .file(stopped_unseen("local_a"));
+        let before = f.snapshot();
+        let live = f.view("local_a");
+        assert_eq!((live.state, live.stopped, live.pid), (Unseen, false, 1));
+
+        f.registry.clear();
+        let after = f.snapshot();
+        assert_eq!(after.sessions.len(), 1);
+        let stopped = f.view("local_a");
+        assert_eq!((stopped.state, stopped.stopped, stopped.pid), (Unseen, true, 0));
+        assert_eq!(stopped.state_since, live.state_since);
+        assert!(transitions(Some(&before), &after).is_empty(), "same episode");
+    }
+
+    #[test]
+    fn a_stopped_session_without_cli_id_uses_desktop_alone() {
+        let mut f = Fixture::new();
+        f.file(DesktopSession {
+            cli_session_id: None,
+            cwd: None,
+            ..stopped_unseen("local_a")
+        });
+        let view = f.view("local_a");
+        assert_eq!((view.state, view.cli_session_id.as_str()), (Unseen, ""));
+        assert_eq!(view.title, "Desktop local_a");
+    }
+
     // --- one session -------------------------------------------------------
 
     #[test]
@@ -3071,7 +3304,10 @@ mod tests {
             .collect();
         assert_eq!(peers, ["local_done", "local_busy", "local_nowhere"]);
         assert_eq!(a.messages.awaiting_reply[0].sent_at, NOW - 10 * MIN);
-        assert_eq!(s.counts.messages_pending, 3);
+        // local_back has no process and is unseen, so it is listed too, and
+        // its reply to local_a awaits an answer.
+        assert!(s.sessions.iter().any(|v| v.key == "local_back" && v.stopped));
+        assert_eq!(s.counts.messages_pending, 4);
 
         // Unarchived again: awaiting again (archiving is not final).
         if let Some(arch) = f.desktop.get_mut("local_arch") {

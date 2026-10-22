@@ -379,8 +379,13 @@ pub struct SessionView {
     pub key: String,
     pub host_session_id: Option<String>,
     pub cli_session_id: String,
+    /// 0 when `stopped`.
     pub pid: u32,
     pub is_desktop: bool,
+    /// No live process: Desktop stopped it (it keeps only a few alive).
+    /// Listed only while waiting, in error or unseen. It starts again with
+    /// the person's next message.
+    pub stopped: bool,
     /// Desktop title (what its sidebar shows), else registry name, else
     /// folder name.
     pub title: String,

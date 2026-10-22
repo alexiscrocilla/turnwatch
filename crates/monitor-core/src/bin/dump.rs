@@ -202,8 +202,9 @@ fn session_line(s: &SessionView) -> String {
     };
     let m = &s.messages;
     let screen = if s.on_screen { " | à l'écran" } else { "" };
+    let stopped = if s.stopped { " | arrêtée" } else { "" };
     format!(
-        "{:<7} | {} | {place} | {waiting} | {plan} | {activity} | {pr} | msg attente {} · non livrés {} · non lus {}{screen}",
+        "{:<7} | {} | {place} | {waiting} | {plan} | {activity} | {pr} | msg attente {} · non livrés {} · non lus {}{stopped}{screen}",
         state_name(s.state),
         s.title,
         m.awaiting_reply.len(),
@@ -315,6 +316,13 @@ mod tests {
         let line = session_line(&asking);
         assert!(line.contains(" | decision « Pousser feat/6-lot et ouvrir la PR ? » | "), "{line}");
         assert!(line.ends_with(" | à l'écran"), "{line}");
+        assert!(!line.contains("arrêtée"), "{line}");
+
+        let stopped = SessionView {
+            stopped: true,
+            ..asking
+        };
+        assert!(session_line(&stopped).ends_with(" | arrêtée | à l'écran"));
     }
 
     #[test]

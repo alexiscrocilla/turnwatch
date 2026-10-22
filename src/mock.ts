@@ -222,6 +222,7 @@ function session(seed: Seed): SessionView {
     cliSessionId: `mock-cli-${seed.key.slice(-6)}`,
     pid: nextPid,
     isDesktop: desktop,
+    stopped: false,
     cwd: `D:\\Développement\\${seed.project}`,
     worktree: null,
     waitingFor: null,
@@ -323,6 +324,9 @@ function initialSessions(): SessionView[] {
       project: "carnet",
       state: "unseen",
       stateSince: ago(4 * 60),
+      // Desktop stopped its process since.
+      stopped: true,
+      pid: 0,
       // Raw Markdown, as the transcript has it: the UI shows it as plain text.
       recap:
         "Les dates relatives se recalculent chaque minute grâce à un minuteur partagé, comme dans " +

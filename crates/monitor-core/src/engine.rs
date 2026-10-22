@@ -209,7 +209,7 @@ impl Engine {
         let mut readers = Readers::default();
         let mut errors = Vec::new();
         let now = paths::now_ms();
-        let pass = readers.read(&paths, settings, &mut errors);
+        let pass = readers.read(&paths, settings, now, &mut errors);
         let empty = BuildState {
             git_pr: &HashMap::new(),
             acks: &HashMap::new(),
@@ -356,9 +356,9 @@ fn desktop_event(path: &Path) -> bool {
         })
 }
 
-/// Transcript of a listed live session: `<root>\<project>\<session id>.jsonl`.
+/// Transcript of a listed session: `<root>\<project>\<session id>.jsonl`.
 /// Subagent transcripts, tool results and other sessions are ignored.
-fn transcript_event(root: &Path, path: &Path, live: &HashSet<String>) -> bool {
+fn transcript_event(root: &Path, path: &Path, listed: &HashSet<String>) -> bool {
     let Ok(relative) = path.strip_prefix(root) else {
         return false;
     };
@@ -372,7 +372,7 @@ fn transcript_event(root: &Path, path: &Path, live: &HashSet<String>) -> bool {
         && relative
             .file_stem()
             .and_then(|stem| stem.to_str())
-            .is_some_and(|id| live.contains(id))
+            .is_some_and(|id| listed.contains(id))
 }
 
 fn missing_dir(path: &Path) -> String {
@@ -397,9 +397,9 @@ struct Worker {
     primed: bool,
     /// `seq` of the latest snapshot published.
     seq: u64,
-    /// CLI ids of the listed live sessions: only their transcripts wake the
-    /// worker up.
-    live_ids: Arc<RwLock<HashSet<String>>>,
+    /// CLI ids of the listed sessions (live, or stopped by Desktop): only
+    /// their transcripts wake the worker up.
+    listed_ids: Arc<RwLock<HashSet<String>>>,
     turns: TurnTracker,
     screen: ScreenTracker,
     panes: PaneReader,
@@ -412,12 +412,12 @@ fn run_worker(
     sink: SnapshotSink,
 ) {
     let paths = Paths::standard();
-    let live_ids: Arc<RwLock<HashSet<String>>> = Arc::default();
+    let listed_ids: Arc<RwLock<HashSet<String>>> = Arc::default();
     let projects_root = paths.projects.clone();
-    let listed = Arc::clone(&live_ids);
+    let watched = Arc::clone(&listed_ids);
     let transcript_filter: EventFilter = Arc::new(move |path: &Path| {
-        let live = listed.read().unwrap_or_else(|poisoned| poisoned.into_inner());
-        transcript_event(&projects_root, path, &live)
+        let listed = watched.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        transcript_event(&projects_root, path, &listed)
     });
     let watches = vec![
         WatchSlot::new(
@@ -459,7 +459,7 @@ fn run_worker(
         last_requests: None,
         primed: false,
         seq: 0,
-        live_ids,
+        listed_ids,
         turns: TurnTracker::default(),
         screen: ScreenTracker::default(),
         panes,
@@ -587,14 +587,14 @@ impl Worker {
             self.applied_poll_secs = secs;
         }
 
-        let pass = self.readers.read(&self.paths, &settings, &mut errors);
+        let pass = self.readers.read(&self.paths, &settings, now, &mut errors);
         {
-            let mut live = self
-                .live_ids
+            let mut listed = self
+                .listed_ids
                 .write()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if *live != pass.listed_ids {
-                *live = pass.listed_ids.clone();
+            if *listed != pass.listed_ids {
+                *listed = pass.listed_ids.clone();
             }
         }
 
@@ -604,7 +604,12 @@ impl Worker {
 
         let (git_pr, gh_ok) = match &self.git_pr {
             Some(service) => {
-                let requests = git_pr_requests(&pass, &settings);
+                let shown: HashSet<String> = lock(&self.shared)
+                    .last
+                    .iter()
+                    .flat_map(|s| s.sessions.iter().map(|v| v.key.clone()))
+                    .collect();
+                let requests = git_pr_requests(&pass, &settings, &shown);
                 if self.last_requests.as_ref() != Some(&requests) {
                     let tracked = requests.clone();
                     if let Err(msg) = guarded(|| service.track(tracked)) {
@@ -787,12 +792,17 @@ struct Pass<'a> {
     desktop_ok: bool,
     /// By CLI session id, for the listed sessions only.
     transcripts: HashMap<String, TranscriptInfo>,
-    /// CLI ids of the listed sessions, whose transcripts are read.
+    /// CLI ids of the listed sessions, live or stopped, whose transcripts
+    /// are read.
     listed_ids: HashSet<String>,
     /// Session key of each live entry, same order as `registry`.
     keys: Vec<String>,
-    /// Desktop id -> session key, for the live Desktop sessions.
-    live_key_by_host: HashMap<String, String>,
+    /// Desktop sessions without a live process that may be listed
+    /// ([`aggregate::stopped_sessions`]).
+    stopped: Vec<&'a DesktopSession>,
+    /// Desktop id -> session key, for the live Desktop sessions and the
+    /// stopped ones.
+    key_by_host: HashMap<String, String>,
 }
 
 impl Pass<'_> {
@@ -827,6 +837,7 @@ impl Readers {
         &'a mut self,
         paths: &Paths,
         settings: &Settings,
+        now: i64,
         errors: &mut Vec<String>,
     ) -> Pass<'a> {
         let (registry, registry_ok) = match guarded(|| registry::read_live(&paths.sessions)) {
@@ -878,10 +889,22 @@ impl Readers {
                 Err(msg) => errors.push(internal_error("Transcriptions", &msg)),
             }
         }
+        let stopped = guarded(|| aggregate::stopped_sessions(now, &registry, registry_ok, desktop))
+            .unwrap_or_else(|msg| {
+                errors.push(internal_error("Sessions arrêtées", &msg));
+                Vec::new()
+            });
         let listed_ids: HashSet<String> = registry
             .iter()
             .filter(|e| is_listed(e, settings, find_desktop(desktop, e).is_some()))
             .map(|e| e.session_id.clone())
+            .chain(stopped.iter().filter_map(|d| {
+                d.cli_session_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned)
+            }))
             .collect();
         let mut transcripts = HashMap::new();
         if let Some(tracker) = &mut self.transcripts {
@@ -907,18 +930,20 @@ impl Readers {
             transcripts,
             listed_ids,
             keys,
-            live_key_by_host: HashMap::new(),
+            stopped,
+            key_by_host: HashMap::new(),
         };
-        let live_key_by_host = pass
-            .registry
-            .iter()
-            .zip(&pass.keys)
-            .filter_map(|(entry, key)| {
+        let stopped_keys = pass.stopped.iter().map(|d| {
+            let host = d.host_session_id.trim().to_owned();
+            (host.clone(), host)
+        });
+        let key_by_host = stopped_keys
+            .chain(pass.registry.iter().zip(&pass.keys).filter_map(|(entry, key)| {
                 pass.desktop_of(entry)
                     .map(|d| (d.host_session_id.clone(), key.clone()))
-            })
+            }))
             .collect();
-        pass.live_key_by_host = live_key_by_host;
+        pass.key_by_host = key_by_host;
         pass
     }
 }
@@ -978,8 +1003,14 @@ fn chosen_entries<'p>(pass: &'p Pass<'_>) -> Vec<(&'p str, &'p RegistryEntry)> {
 
 /// One request per listed live session key. When several processes share a
 /// key (Desktop restarted one and the old one is still alive), the process
-/// the snapshot shows wins: same rule as `aggregate::entry_rank`.
-fn git_pr_requests(pass: &Pass<'_>, settings: &Settings) -> Vec<GitPrRequest> {
+/// the snapshot shows wins: same rule as `aggregate::entry_rank`. Stopped
+/// sessions get one only once the previous snapshot listed them (`shown`):
+/// most of them stay hidden, and their folders are not worth reading.
+fn git_pr_requests(
+    pass: &Pass<'_>,
+    settings: &Settings,
+    shown: &HashSet<String>,
+) -> Vec<GitPrRequest> {
     let mut requests: Vec<GitPrRequest> = Vec::new();
     let mut chosen: HashMap<String, (usize, aggregate::EntryRank)> = HashMap::new();
     let candidates = pass
@@ -1028,6 +1059,28 @@ fn git_pr_requests(pass: &Pass<'_>, settings: &Settings) -> Vec<GitPrRequest> {
                 requests.push(request);
             }
         }
+    }
+    for desktop in &pass.stopped {
+        let key = desktop.host_session_id.trim();
+        if !shown.contains(key) || chosen.contains_key(key) {
+            continue;
+        }
+        let branch_hint = desktop
+            .branch
+            .clone()
+            .filter(|b| !b.is_empty())
+            .or_else(|| {
+                let cli = desktop.cli_session_id.as_deref()?.trim();
+                pass.transcripts.get(cli)?.git_branch.clone()
+            });
+        requests.push(GitPrRequest {
+            key: key.to_owned(),
+            cwd: desktop.cwd.clone().unwrap_or_default(),
+            branch_hint,
+            desktop_pr: desktop.pr.clone(),
+            turn_edge_at: desktop.last_turn_edge_at,
+            working: false,
+        });
     }
     requests
 }
@@ -1173,20 +1226,21 @@ impl ScreenTracker {
     }
 }
 
-/// Live keys Desktop shows: the sessions of its panes, from its config file.
-/// When that file cannot be read, the session the user switched to last.
+/// Keys of the live or stopped sessions Desktop shows: the sessions of its
+/// panes, from its config file. When that file cannot be read, the session
+/// the user switched to last.
 fn visible_keys(layout: Option<&[String]>, pass: &Pass<'_>) -> Vec<String> {
     match layout {
         Some(ids) => ids
             .iter()
-            .filter_map(|id| pass.live_key_by_host.get(id).cloned())
+            .filter_map(|id| pass.key_by_host.get(id).cloned())
             .collect(),
         None => on_screen_session(
             pass.desktop
                 .values()
                 .map(|d| (d.host_session_id.as_str(), d.last_focused_at)),
         )
-        .and_then(|host| pass.live_key_by_host.get(host).cloned())
+        .and_then(|host| pass.key_by_host.get(host).cloned())
         .into_iter()
         .collect(),
     }
@@ -1668,7 +1722,7 @@ mod tests {
             last_requests: None,
             primed: false,
             seq: 0,
-            live_ids: Arc::default(),
+            listed_ids: Arc::default(),
             turns: TurnTracker::default(),
             screen: ScreenTracker::default(),
         };
@@ -1878,6 +1932,113 @@ mod tests {
             (change.from, change.to),
             (Some(SessionState::Working), SessionState::Unseen)
         );
+    }
+
+    #[test]
+    fn sessions_desktop_stopped_stay_listed_while_they_need_the_person() {
+        let dir = TempDir::new("stopped");
+        let now = paths::now_ms();
+        let desktop = |id: &str, cli: &str, edge: i64, focused: i64, archived: bool| {
+            serde_json::json!({
+                "sessionId": id,
+                "cliSessionId": cli,
+                "title": id,
+                "cwd": r"D:\Projets\démo",
+                "isArchived": archived,
+                "lastTurnEdgeAt": edge,
+                "lastFocusedAt": focused,
+                "completedTurns": 2
+            })
+            .to_string()
+        };
+        // Unseen, its process alive for now.
+        dir.write(
+            "desktop/account/org/local_a.json",
+            &desktop("local_a", "s1", now - 30_000, now - 60_000, false),
+        );
+        // No process, seen after its turn, but the turn asked a question.
+        dir.write(
+            "desktop/account/org/local_q.json",
+            &desktop("local_q", "s2", now - 20_000, now - 10_000, false),
+        );
+        let line = |value: serde_json::Value| value.to_string();
+        let transcript = [
+            line(serde_json::json!({
+                "type": "user", "uuid": "u1", "timestamp": "2026-10-22T14:00:00.000Z",
+                "sessionId": "s2", "message": {"role": "user", "content": "Ouvre la PR"}
+            })),
+            line(serde_json::json!({
+                "type": "assistant", "uuid": "a1", "timestamp": "2026-10-22T14:00:05.000Z",
+                "sessionId": "s2",
+                "message": {"role": "assistant", "id": "m1", "content": [{
+                    "type": "tool_use", "id": "toolu_1", "name": "mcp__ccd_turn__wrap_up",
+                    "input": {"recap": "Branche poussée.", "ask": "J'ouvre la PR ?",
+                        "actions": [{"label": "Oui"}, {"label": "Pas encore"}]}
+                }]}
+            })),
+            line(serde_json::json!({
+                "type": "system", "subtype": "stop_hook_summary", "uuid": "s1",
+                "preventedContinuation": false, "timestamp": "2026-10-22T14:00:06.000Z",
+                "sessionId": "s2"
+            })),
+        ];
+        dir.write("projects/D--Projets-demo/s2.jsonl", &format!("{}\n", transcript.join("\n")));
+        // No process: seen after its turn, archived, or too old.
+        dir.write(
+            "desktop/account/org/local_seen.json",
+            &desktop("local_seen", "s3", now - 20_000, now - 10_000, false),
+        );
+        dir.write(
+            "desktop/account/org/local_arch.json",
+            &desktop("local_arch", "s4", now - 20_000, now - 60_000, true),
+        );
+        let old = now - aggregate::STOPPED_WINDOW_MS - 60_000;
+        dir.write(
+            "desktop/account/org/local_old.json",
+            &desktop("local_old", "s5", old, old - 60_000, false),
+        );
+        let pid = std::process::id();
+        dir.write(
+            &format!("sessions/{pid}.json"),
+            &serde_json::json!({
+                "pid": pid,
+                "sessionId": "s1",
+                "hostSessionId": "local_a",
+                "entrypoint": "claude-desktop",
+                "status": "idle",
+                "statusUpdatedAt": now - 30_000
+            })
+            .to_string(),
+        );
+        let (mut worker, published) = test_worker(&dir.0, None);
+        worker.recompute(false);
+        assert!(
+            worker.listed_ids.read().expect("listed ids").contains("s2"),
+            "its transcript is watched"
+        );
+        std::fs::remove_file(dir.0.join(format!("sessions/{pid}.json"))).expect("stop process");
+        worker.recompute(false);
+
+        let published = lock(&published);
+        assert_eq!(published.len(), 2);
+        let first = &published[0].0.sessions;
+        let keys: Vec<&str> = first.iter().map(|s| s.key.as_str()).collect();
+        assert_eq!(keys, ["local_q", "local_a"]);
+        let q = &first[0];
+        assert!(q.stopped);
+        assert_eq!(q.state, SessionState::Waiting);
+        let question = q.question.as_ref().expect("question");
+        assert_eq!(question.text, "J'ouvre la PR ?");
+        assert_eq!(question.options, ["Oui", "Pas encore"]);
+        assert!(!first[1].stopped);
+        assert_eq!(first[1].state, SessionState::Unseen);
+
+        let (second, changes) = &published[1];
+        let a = second.sessions.iter().find(|s| s.key == "local_a").expect("local_a");
+        assert!(a.stopped);
+        assert_eq!((a.state, a.pid), (SessionState::Unseen, 0));
+        assert_eq!(second.sessions.len(), 2);
+        assert!(changes.is_empty(), "same state: no toast");
     }
 
     #[test]
@@ -2099,7 +2260,8 @@ mod tests {
             transcripts: HashMap::new(),
             listed_ids: HashSet::new(),
             keys: Vec::new(),
-            live_key_by_host: live
+            stopped: Vec::new(),
+            key_by_host: live
                 .iter()
                 .map(|(host, key)| ((*host).to_owned(), (*key).to_owned()))
                 .collect(),
@@ -2576,13 +2738,14 @@ mod tests {
             transcripts,
             listed_ids: HashSet::new(),
             keys: vec!["cli:cli-a".into(), "local_b".into()],
-            live_key_by_host: HashMap::new(),
+            stopped: Vec::new(),
+            key_by_host: HashMap::new(),
         };
         let all = Settings {
             include_cli_sessions: true,
             ..Settings::default()
         };
-        let requests = git_pr_requests(&pass, &all);
+        let requests = git_pr_requests(&pass, &all, &HashSet::new());
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].key, "cli:cli-a");
         assert_eq!(requests[0].branch_hint.as_deref(), Some("feat/a"));
@@ -2599,7 +2762,7 @@ mod tests {
             ..RegistryEntry::default()
         });
         pass.keys.push("cli:cli-c".into());
-        let listed = git_pr_requests(&pass, &Settings::default());
+        let listed = git_pr_requests(&pass, &Settings::default(), &HashSet::new());
         let keys: Vec<&str> = listed.iter().map(|r| r.key.as_str()).collect();
         assert_eq!(keys, ["cli:cli-a", "local_b"]);
     }
@@ -2634,11 +2797,74 @@ mod tests {
             transcripts: HashMap::new(),
             listed_ids: HashSet::new(),
             keys: vec!["local_a".into(), "local_a".into(), "local_a".into()],
-            live_key_by_host: HashMap::new(),
+            stopped: Vec::new(),
+            key_by_host: HashMap::new(),
         };
-        let requests = git_pr_requests(&pass, &Settings::default());
+        let requests = git_pr_requests(&pass, &Settings::default(), &HashSet::new());
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].cwd, r"D:\new");
+    }
+
+    #[test]
+    fn stopped_sessions_get_requests_once_listed() {
+        let stopped = |id: &str, cli: &str, branch: Option<&str>| DesktopSession {
+            host_session_id: id.into(),
+            cli_session_id: Some(cli.into()),
+            cwd: Some(format!(r"D:\{id}")),
+            branch: branch.map(str::to_owned),
+            last_turn_edge_at: Some(7),
+            ..DesktopSession::default()
+        };
+        let desktop: HashMap<String, DesktopSession> = [
+            ("local_s".to_owned(), stopped("local_s", "cli-s", None)),
+            ("local_t".to_owned(), stopped("local_t", "cli-t", Some("feat/t"))),
+        ]
+        .into_iter()
+        .collect();
+        let transcripts: HashMap<String, TranscriptInfo> = [(
+            "cli-s".to_owned(),
+            TranscriptInfo {
+                git_branch: Some("fix/s".into()),
+                ..TranscriptInfo::default()
+            },
+        )]
+        .into_iter()
+        .collect();
+        let pass = Pass {
+            registry: Vec::new(),
+            registry_ok: true,
+            desktop: &desktop,
+            desktop_ok: true,
+            transcripts,
+            listed_ids: HashSet::new(),
+            keys: Vec::new(),
+            stopped: vec![&desktop["local_s"], &desktop["local_t"]],
+            key_by_host: HashMap::new(),
+        };
+        let settings = Settings::default();
+        assert!(
+            git_pr_requests(&pass, &settings, &HashSet::new()).is_empty(),
+            "not listed yet: no git or gh for them"
+        );
+        let requests = git_pr_requests(&pass, &settings, &set(&["local_s", "local_t"]));
+        let keys: Vec<&str> = requests.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(keys, ["local_s", "local_t"]);
+        assert_eq!(requests[0].cwd, r"D:\local_s");
+        assert_eq!(requests[0].branch_hint.as_deref(), Some("fix/s"));
+        assert_eq!(requests[1].branch_hint.as_deref(), Some("feat/t"));
+        assert_eq!(requests[1].turn_edge_at, Some(7));
+        assert!(requests.iter().all(|r| !r.working));
+    }
+
+    #[test]
+    fn stopped_sessions_in_a_pane_are_visible() {
+        let desktop = desktop_focus(&[("local_live", Some(1)), ("local_stopped", Some(2))]);
+        let mut pass = pass_with(&desktop, &[("local_live", "local_live")]);
+        pass.key_by_host
+            .insert("local_stopped".into(), "local_stopped".into());
+        let layout = keys(&["local_stopped", "local_live", "local_other"]);
+        assert_eq!(visible_keys(Some(&layout), &pass), ["local_stopped", "local_live"]);
+        assert_eq!(visible_keys(None, &pass), ["local_stopped"]);
     }
 
     /// Read-only: runs the real engine for 75 s on this machine's sessions

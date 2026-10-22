@@ -126,6 +126,7 @@ const COMMAND_FAILURE: Record<string, string> = {
 const READING = "Lecture des sessions…";
 const CLI_TOOLTIP = "Session lancée dans un terminal : elle ne peut pas être ouverte dans Claude Desktop";
 const ON_SCREEN_TOOLTIP = "Affichée dans Claude Desktop, au premier plan";
+const STOPPED_TOOLTIP = "En pause : Claude Desktop a arrêté son processus. Elle reprend dès que tu lui écris.";
 
 const DEFAULT_SETTINGS: Settings = {
   notifyOnWaiting: true,
@@ -260,6 +261,7 @@ function sanitizeSession(raw: unknown): SessionView | null {
     cwd: str(s.cwd),
     // Only Desktop sessions can be opened; "cli:" keys never are.
     isDesktop: s.isDesktop !== false && !raw.key.startsWith("cli:"),
+    stopped: raw.stopped === true,
     state: STATES.includes(s.state) ? s.state : "idle",
     waitingFor: str(s.waitingFor).trim() || null,
     question: sanitizeQuestion(raw.question),
@@ -1214,6 +1216,7 @@ function cardTooltip(s: SessionView): string {
   const parent = parentTitle(s);
   if (parent) lines.push(`Lancée depuis ${parent}`);
   lines.push(...extrasLines(extrasModel(s)));
+  if (s.stopped) lines.push(STOPPED_TOOLTIP);
   if (s.onScreen) lines.push(ON_SCREEN_TOOLTIP);
   return lines.join("\n");
 }

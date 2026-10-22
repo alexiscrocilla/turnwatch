@@ -80,8 +80,12 @@ export interface SessionView {
   key: string;
   hostSessionId: string | null;
   cliSessionId: string;
+  /** 0 when `stopped`. */
   pid: number;
   isDesktop: boolean;
+  /** No live process: Desktop stopped it. Listed only while waiting, in error
+   * or unseen; it starts again with the person's next message. */
+  stopped: boolean;
   /** Desktop title, else registry name, else folder name. */
   title: string;
   project: string;

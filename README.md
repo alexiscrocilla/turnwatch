@@ -62,6 +62,7 @@ Comment ces états sont décidés :
 - **Erreur** suit les champs d'erreur de Desktop sur 7 jours. Un simple redémarrage de Desktop ne compte pas. Elle s'efface à ton prochain message.
 - **Non vue** se remet à zéro quand tu cliques la carte, ou quand la session est visible dans un volet de Claude Desktop (vue partagée comprise) resté au premier plan au moins une seconde. Les sessions déjà vues sont mémorisées dans `acks.json` et survivent à un redémarrage de l'application. Un tour lancé par une autre session ne rend pas une session « non vue », sauf s'il a produit un résultat.
 - La liste de tâches reprend exactement les statuts affichés par Desktop.
+- **Sessions en pause** : Claude Desktop ne garde qu'un nombre limité de processus en vie (6 au minimum, davantage selon la mémoire) et arrête les sessions inactives au-delà, ou quand la mémoire manque. Une session sans processus reste listée tant qu'elle attend, est en erreur ou non vue, si son dernier tour ou sa dernière activité date de moins de 7 jours. Son état est déduit du fichier de Desktop et du transcript, comme pour les autres. Son infobulle indique « En pause », et un clic l'ouvre dans Desktop comme d'habitude. Une session en pause et inactive n'est pas listée.
 
 ## D'où viennent les données
 
@@ -69,7 +70,7 @@ Tout est lu sur la machine, en lecture seule. Le seul accès réseau passe par `
 
 | Source | Ce qu'on en tire | Format documenté ? |
 |---|---|---|
-| `~\.claude\sessions\<pid>.json` | Sessions vivantes, état, raison de l'attente | Non (même contenu que `claude agents --json`, qui est officiel) |
+| `~\.claude\sessions\<pid>.json` | Sessions vivantes, état, raison de l'attente (une session Desktop sans fichier ici est en pause) | Non (même contenu que `claude agents --json`, qui est officiel) |
 | `%APPDATA%\Claude\claude-code-sessions\…\local_<id>.json` | Titre, archivage, dernier passage, résumé du tour, PR liée par Desktop, messages entre sessions, session parente | Non |
 | `~\.claude\projects\…\<id>.jsonl` | Outil en cours, liste de tâches, question de fin de tour, erreurs d'API, branche, dernier message | Non |
 | `%APPDATA%\Claude\claude_desktop_config.json` | Sessions affichées dans les volets de Desktop | Non |
@@ -112,6 +113,7 @@ Elle ne modifie rien dans `~\.claude` ni dans les dossiers de Claude Desktop.
 - Une attente qui change de nature sans passer par un autre état (une « question probable » confirmée ensuite par Desktop, par exemple) ne relance pas de rappel.
 - Les questions détectées par Desktop ou par le « ? » final disparaissent quand une autre session ou une tâche relance celle-ci. Les questions à boutons, elles, restent jusqu'à ton message.
 - Les sessions cloud lancées depuis Desktop n'ont pas de trace locale et n'apparaissent pas.
+- Une session en pause dont le dernier tour date de plus de 7 jours n'apparaît plus, même si sa question est restée sans réponse.
 - Les builds de développement utilisent l'identifiant `local.claude-session-monitor.dev` et peuvent tourner à côté de la version release.
 
 ## Structure
