@@ -1,0 +1,117 @@
+{
+  "sessionId": "local_11111111-2222-4333-8444-555555555555",
+  "cliSessionId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+  "priorCliSessionIds": ["00000000-1111-4222-8333-444444444444"],
+  "cwd": "D:\\Données Utilisateur\\Projets\\demo app",
+  "originCwd": "D:\\Données Utilisateur\\Projets\\demo app",
+  "createdAt": 1792600000000,
+  "lastActivityAt": 1792600900000,
+  "lastFocusedAt": 1792600500000,
+  "lastTurnEdgeAt": 1792600890000,
+  "latestUserFrameAt": 1792600100000,
+  "model": "claude-opus-5-5",
+  "effort": "high",
+  "isArchived": false,
+  "isStarred": true,
+  "title": "  Fix the flaky upload test ",
+  "titleSource": "auto",
+  "permissionMode": "auto",
+  "chromePermissionMode": "ask",
+  "completedTurns": 7,
+  "turnWrapUp": { "description": "The upload test now waits for the server; all tests pass." },
+  "lastTurnReport": "Upload test fixed, PR opened.",
+  "branch": "claude/fix-upload-test",
+  "sourceBranch": "main",
+  "worktreeName": "fix-upload-test",
+  "worktreePath": "D:\\Données Utilisateur\\Projets\\demo app\\.claude\\worktrees\\fix-upload-test",
+  "writtenBranches": ["claude/fix-upload-test"],
+  "prNumber": 42,
+  "prUrl": "https://github.com/example/demo-app/pull/42",
+  "prRepository": "example/demo-app",
+  "prState": "OPEN",
+  "prs": [
+    {
+      "prNumber": 40,
+      "repo": "example/demo-app",
+      "host": "github.com",
+      "provider": "github",
+      "url": "https://github.com/example/demo-app/pull/40",
+      "branch": "claude/older",
+      "state": "MERGED",
+      "baseRef": "main",
+      "dismissed": true
+    }
+  ],
+  "spawnedFrom": {
+    "sessionId": "local_99999999-8888-4777-8666-555555555555",
+    "taskId": "task_0001",
+    "title": "Release checklist",
+    "sideSession": true,
+    "sharedFolder": false,
+    "name": "upload-fix"
+  },
+  "peerMessaged": true,
+  "peerReceipts": [
+    {
+      "messageId": "msg-1",
+      "toolUseId": "toolu_0001",
+      "targetSessionId": "local_99999999-8888-4777-8666-555555555555",
+      "sentAt": 1792600200000,
+      "delivery": "delivered",
+      "deliveredAt": 1792600200050,
+      "readAt": 1792600260000,
+      "repliedAt": 1792600300000
+    },
+    {
+      "messageId": "msg-bad",
+      "toolUseId": "toolu_0002",
+      "targetSessionId": 17,
+      "sentAt": 1792600400000,
+      "delivery": "delivered"
+    },
+    "not an object",
+    {
+      "messageId": "msg-2",
+      "toolUseId": "toolu_0003",
+      "targetSessionId": "local_99999999-8888-4777-8666-555555555555",
+      "sentAt": 1792600800000,
+      "delivery": "delivered",
+      "deliveredAt": 1792600800040
+    }
+  ],
+  "contextExceededCount": 1,
+  "priorErrorMark": {
+    "source": "query_error",
+    "category": "process_interrupted",
+    "at": 1792600600000,
+    "hadPendingTurn": true
+  },
+  "queryCrashes": [
+    {
+      "assistantUuid": "11111111-0000-4000-8000-000000000001",
+      "resultUuid": "11111111-0000-4000-8000-000000000002",
+      "cliSessionId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "at": 1792600700000,
+      "errorCategory": "process_interrupted",
+      "errorMessage": "The process was interrupted\nwhile the turn was still running. Synthetic filler text that makes the message longer than one hundred and twenty characters so that it must be shortened."
+    }
+  ],
+  "postTurnSummary": {
+    "status_category": "done",
+    "status_detail": "synthetic",
+    "needs_action": "none",
+    "summarizes_uuid": "22222222-0000-4000-8000-000000000000"
+  },
+  "toolSurfaceSnapshot": {
+    "tools": [
+      { "name": "Bash", "schema": { "type": "object", "properties": { "command": { "type": "string" } } } },
+      { "name": "Read", "schema": { "type": "object", "properties": { "file_path": { "type": "string" } } } }
+    ],
+    "nested": [[1, 2, [3, 4, { "deep": [true, false, null] }]]]
+  },
+  "promptAppendSnapshot": { "text": "synthetic", "parts": ["a", "b", "c"] },
+  "enabledMcpTools": { "server-a": ["tool_one", "tool_two"], "server-b": [] },
+  "remoteMcpServersConfig": [],
+  "sessionPermissionUpdates": [],
+  "alwaysAllowedReasons": []
+}

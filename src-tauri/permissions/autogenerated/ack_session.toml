@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ack-session"
+description = "Enables the ack_session command without any pre-configured scope."
+commands.allow = ["ack_session"]
+
+[[permission]]
+identifier = "deny-ack-session"
+description = "Denies the ack_session command without any pre-configured scope."
+commands.deny = ["ack_session"]

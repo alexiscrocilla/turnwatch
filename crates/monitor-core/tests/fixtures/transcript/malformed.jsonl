@@ -1,0 +1,16 @@
+{"parentUuid":"00000000-0000-4000-8000-000000000162","isSidechain":false,"promptId":"00000000-0000-4000-8000-000000000164","message":{"role":"user","content":"Début"},"type":"user","uuid":"00000000-0000-4000-8000-000000000163","timestamp":"2026-10-22T09:00:00Z","userType":"external","entrypoint":"claude-desktop","cwd":"D:\\Projets\\démo","sessionId":"0f0e0d0c-1111-4222-8333-444455556666","version":"2.1.308","gitBranch":"dev","permissionMode":"default"}
+{"parentUuid":"x","isSidechain":false,"type":"assistant","message":{"content":[{"type":"text","text":"coupé
+not json at all
+[1,2,3]
+
+   
+{"type":"assistant","message":"juste une chaîne","timestamp":12345}
+{"type":"assistant","isSidechain":"no","gitBranch":42,"timestamp":"2026-10-22T09:00:05Z","message":{"content":[42,"x",null,[1],{"type":"text","text":"Toujours\n  là"}]}}
+{"type":"assistant","timestamp":"pas une date","message":{"content":[{"type":"tool_use","id":"toolu_b1","name":"Bash","input":{"command":"ls"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":17,"is_error":"yes"}]}}
+{"type":"assistant","message":{"content":{"type":"text","text":"objet"}}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_z","name":""}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"   "}]}}
+{"type":"weird","timestamp":"2026-10-22T23:00:00Z"}
+{"timestamp":"2026-10-22T09:00:01Z","type":"user","message":{"content":"ordre des clés"}}
+{"type":"system","subtype":"turn_duration","timestamp":"2026-10-22T08:00:00Z","durationMs":5}

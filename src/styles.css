@@ -1,0 +1,926 @@
+/* Session monitor window: calm, native Windows 11 look, light and dark. */
+
+:root {
+  --font: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+
+  /* State colors (dots, accents). Light values reach 3:1 against --bg and every
+     card background; text values reach 4.5:1 on every background they sit on,
+     tinted chips and hovered waiting cards included (WCAG AA). */
+  --waiting: #c97a00;
+  --error: #ef4444;
+  --unseen: #3b82f6;
+  --working: #15913f;
+  --merged: #8b5cf6;
+  --idle: #8c8c8c;
+
+  /* Light theme. */
+  --bg: #f3f3f3;
+  --card: #ffffff;
+  --card-hover: #fafafa;
+  --card-press: #f0f0f0;
+  --border: #e3e3e3;
+  --border-strong: #cfcfcf;
+  --text: #1b1b1b;
+  --text-muted: #5c5c5c;
+  --text-faint: #6b6b6b;
+  --accent: #005fb8;
+  --hover: rgba(0, 0, 0, 0.05);
+  --press: rgba(0, 0, 0, 0.09);
+  --track: rgba(0, 0, 0, 0.09);
+  --scroll-thumb: rgba(0, 0, 0, 0.28);
+  --desk: #e4e4e4;
+
+  /* Readable text variants of the state colors. */
+  --waiting-text: #8a4d05;
+  /* A softer amber for what is only guessed ("Question dans le dernier message"). */
+  --waiting-soft-text: #8c5410;
+  --error-text: #b3261e;
+  --unseen-text: #1a56c4;
+  --working-text: #0b6b34;
+  --merged-text: #6d28d9;
+
+  color-scheme: light dark;
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 21px;
+  color: var(--text);
+  background: var(--bg);
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --waiting: #f59e0b;
+    --working: #22c55e;
+    --idle: #808080;
+
+    --bg: #202020;
+    --card: #2b2b2b;
+    --card-hover: #303030;
+    --card-press: #282828;
+    --border: #383838;
+    --border-strong: #4a4a4a;
+    --text: #f3f3f3;
+    --text-muted: #b9b9b9;
+    --text-faint: #a3a3a3;
+    --accent: #60cdff;
+    --hover: rgba(255, 255, 255, 0.06);
+    --press: rgba(255, 255, 255, 0.1);
+    --track: rgba(255, 255, 255, 0.12);
+    --scroll-thumb: rgba(255, 255, 255, 0.28);
+    --desk: #141414;
+
+    --waiting-text: #fbbf24;
+    --waiting-soft-text: #d6b26e;
+    --error-text: #fb8d8d;
+    --unseen-text: #7ab4fb;
+    --working-text: #4ade80;
+    --merged-text: #b9a3fc;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+p {
+  margin: 0;
+}
+
+/* Read by screen readers, not shown. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg);
+}
+
+/* ------------------------------------------------------------------ */
+/* Title bar                                                          */
+/* ------------------------------------------------------------------ */
+
+.titlebar {
+  flex: 0 0 48px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 16px;
+  line-height: 22px;
+  color: var(--text-muted);
+}
+
+.summary-part {
+  color: var(--text);
+}
+
+.summary-part.tone--waiting {
+  color: var(--waiting-text);
+  font-weight: 600;
+}
+
+.summary-part.tone--error {
+  color: var(--error-text);
+  font-weight: 600;
+}
+
+.summary-sep {
+  color: var(--text-faint);
+}
+
+.titlebar-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 100%;
+}
+
+.icon-btn {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.icon-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.icon-btn:active {
+  background: var(--press);
+}
+
+.icon-btn svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.icon-btn[aria-pressed="true"] {
+  color: var(--accent);
+}
+
+.icon-btn[aria-pressed="true"] .pin-body {
+  fill: currentColor;
+}
+
+/* ------------------------------------------------------------------ */
+/* Compact bar (the whole window when compact)                        */
+/* ------------------------------------------------------------------ */
+
+.compact-bar {
+  display: none;
+  flex: 0 0 44px;
+  height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px 0 14px;
+  font-size: 15px;
+  line-height: 20px;
+}
+
+.compact-bar .dot {
+  width: 11px;
+  height: 11px;
+}
+
+.compact-open {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  margin-left: -6px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  white-space: nowrap;
+}
+
+.compact-open:hover {
+  background: var(--hover);
+}
+
+.compact-open:active {
+  background: var(--press);
+}
+
+/* A terminal session cannot be opened: no pressed look. */
+.compact-open.is-static:hover,
+.compact-open.is-static:active {
+  background: transparent;
+}
+
+/* "<title> · <question or reason>": both shrink, the longer one more. */
+.compact-open-title {
+  flex: 0 1 auto;
+  min-width: 48px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.compact-open-reason {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Keeps the space before "·": a flex item drops its leading white space. */
+  white-space: pre;
+  color: var(--waiting-text);
+}
+
+.compact-open-reason.is-tentative {
+  font-style: italic;
+  color: var(--waiting-soft-text);
+}
+
+.compact-more {
+  flex-shrink: 0;
+  margin-left: 6px;
+  padding: 0 7px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--waiting-text);
+  background: color-mix(in srgb, var(--waiting) 10%, transparent);
+}
+
+.compact-summary,
+.compact-notice {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.compact-notice {
+  color: var(--error-text);
+}
+
+/* Information (a hint, a terminal session), not a failure. */
+.compact-notice.is-info {
+  color: var(--text-muted);
+}
+
+.compact-warn--warn,
+.compact-warn--warn:hover {
+  color: var(--waiting-text);
+}
+
+.compact-warn--error,
+.compact-warn--error:hover {
+  color: var(--error-text);
+}
+
+.compact-spacer {
+  flex: 1 1 0;
+  align-self: stretch;
+  min-width: 8px;
+}
+
+.is-compact .titlebar,
+.is-compact .scroller,
+.is-compact .health {
+  display: none;
+}
+
+.is-compact .compact-bar {
+  display: flex;
+}
+
+/* A window this short can only be the compact bar, whatever the settings say. */
+@media (max-height: 72px) {
+  .titlebar,
+  .scroller,
+  .health {
+    display: none;
+  }
+
+  .compact-bar {
+    display: flex;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Session list: groups by project                                    */
+/* ------------------------------------------------------------------ */
+
+.scroller {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 6px 14px 10px;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) transparent;
+}
+
+.group + .group {
+  margin-top: 16px;
+}
+
+.group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0 4px 6px;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.group-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+
+.group-count {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.group-count .tone--waiting {
+  color: var(--waiting-text);
+}
+
+.group-count .tone--error {
+  color: var(--error-text);
+}
+
+.group-count-sep {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+
+/* ------------------------------------------------------------------ */
+/* Cards                                                              */
+/* ------------------------------------------------------------------ */
+
+.card {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.card + .card {
+  margin-top: 6px;
+}
+
+/* Only cards that open something react to the pointer. */
+.card--action:hover {
+  background: var(--card-hover);
+  border-color: var(--border-strong);
+}
+
+.card--action:active {
+  background: var(--card-press);
+}
+
+.card--waiting {
+  border-color: color-mix(in srgb, var(--waiting) 50%, var(--border));
+  background: color-mix(in srgb, var(--waiting) 6%, var(--card));
+}
+
+.card--waiting.card--action:hover {
+  border-color: color-mix(in srgb, var(--waiting) 70%, var(--border));
+  background: color-mix(in srgb, var(--waiting) 9%, var(--card));
+}
+
+.card--error {
+  border-color: color-mix(in srgb, var(--error) 40%, var(--border));
+  background: color-mix(in srgb, var(--error) 4%, var(--card));
+}
+
+.card--error.card--action:hover {
+  border-color: color-mix(in srgb, var(--error) 60%, var(--border));
+  background: color-mix(in srgb, var(--error) 7%, var(--card));
+}
+
+/* Idle: one quiet line, no card surface. */
+.card--idle {
+  padding-top: 7px;
+  padding-bottom: 7px;
+  background: transparent;
+}
+
+.card--idle .card-title {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+/* The card's own button, under the content: the keyboard and screen-reader
+   entry point (its name and description say what the card shows). A click
+   anywhere on the card opens the session too. */
+.card-hit {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+}
+
+.card-hit:focus-visible {
+  outline-offset: 2px;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 24px;
+}
+
+.card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 600;
+}
+
+/* "attend · 3 h" */
+.card-status {
+  flex: 0 0 auto;
+  font-size: 14px;
+  line-height: 20px;
+  white-space: nowrap;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.status-label {
+  font-weight: 600;
+}
+
+.status--waiting {
+  color: var(--waiting-text);
+}
+
+.status--error {
+  color: var(--error-text);
+}
+
+.status--unseen {
+  color: var(--unseen-text);
+}
+
+.status--working {
+  color: var(--working-text);
+}
+
+/* Shown in a pane of the Claude Desktop window in front. */
+.card-eye {
+  flex: 0 0 auto;
+  display: inline-flex;
+  margin-left: -4px;
+  color: var(--text-faint);
+}
+
+.card-eye .icon {
+  width: 15px;
+  height: 15px;
+}
+
+/* Started in a terminal: cannot be opened in Desktop. */
+.card-tag {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: 0.02em;
+  color: var(--text-faint);
+}
+
+.dot {
+  position: relative;
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--idle);
+}
+
+.dot--waiting {
+  background: var(--waiting);
+}
+
+.dot--error {
+  background: var(--error);
+}
+
+.dot--unseen {
+  background: var(--unseen);
+}
+
+.dot--working {
+  background: var(--working);
+}
+
+.dot--none {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--idle);
+}
+
+/* A static halo rather than a pulse: an endless animation keeps WebView2
+   repainting (about a fifth of a CPU core) in a window that stays open all day. */
+.dot--working {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--working) 28%, transparent);
+}
+
+.icon {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Line 2, aligned with the title past the dot. */
+.card-line {
+  min-width: 0;
+  margin-left: 20px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.clamp-2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.line--question {
+  font-size: 15px;
+  line-height: 21px;
+  font-weight: 600;
+  color: var(--waiting-text);
+}
+
+.line--reason {
+  font-weight: 600;
+  color: var(--waiting-text);
+}
+
+/* Only guessed from the last message: said, not asserted. */
+.line--question.is-tentative,
+.line--reason.is-tentative {
+  font-style: italic;
+  font-weight: 400;
+  color: var(--waiting-soft-text);
+}
+
+.line--error {
+  color: var(--error-text);
+}
+
+.plan {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.plan-track {
+  flex: 0 0 64px;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--track);
+}
+
+.plan-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.plan--done .plan-fill {
+  background: var(--working);
+}
+
+.plan-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.plan-count {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* PR chip on line 1, colored by its checks; opens the PR. */
+.chip {
+  --chip-fg: var(--text-muted);
+  --chip-border: var(--border-strong);
+  --chip-bg: transparent;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  margin: 0;
+  padding: 0 8px;
+  border: 1px solid var(--chip-border);
+  border-radius: 12px;
+  background: var(--chip-bg);
+  color: var(--chip-fg);
+  font-size: 13px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.chip--pr {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Hover and press cues leave the background alone, so the text contrast holds. */
+.chip--pr:hover {
+  border-color: var(--chip-fg);
+}
+
+.chip--pr:active {
+  border-color: var(--chip-fg);
+  box-shadow: inset 0 0 0 1px var(--chip-fg);
+}
+
+.chip--pass {
+  --chip-fg: var(--working-text);
+  --chip-border: color-mix(in srgb, var(--working) 45%, transparent);
+  --chip-bg: color-mix(in srgb, var(--working) 10%, transparent);
+}
+
+.chip--fail {
+  --chip-fg: var(--error-text);
+  --chip-border: color-mix(in srgb, var(--error) 45%, transparent);
+  --chip-bg: color-mix(in srgb, var(--error) 10%, transparent);
+}
+
+.chip--pending {
+  --chip-fg: var(--waiting-text);
+  --chip-border: color-mix(in srgb, var(--waiting) 50%, transparent);
+  --chip-bg: color-mix(in srgb, var(--waiting) 10%, transparent);
+}
+
+.chip--draft {
+  border-style: dashed;
+}
+
+/* ------------------------------------------------------------------ */
+/* Empty state and health line                                        */
+/* ------------------------------------------------------------------ */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 100%;
+  padding: 24px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.empty svg {
+  width: 36px;
+  height: 36px;
+  margin-bottom: 4px;
+  fill: none;
+  stroke: var(--text-faint);
+  stroke-width: 1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.empty-title {
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.empty-hint {
+  max-width: 280px;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.health {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 14px 9px;
+  border-top: 1px solid var(--border);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.health-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--waiting-text);
+}
+
+.health-row--error {
+  color: var(--error-text);
+}
+
+.health-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* ------------------------------------------------------------------ */
+/* Windows contrast themes: backgrounds and shadows are forced away,  */
+/* so keep the state dots and the plan bar visible on purpose         */
+/* ------------------------------------------------------------------ */
+
+@media (forced-colors: active) {
+  .dot {
+    forced-color-adjust: none;
+    border: 1px solid CanvasText;
+  }
+
+  .dot--none {
+    background: Canvas;
+    box-shadow: none;
+  }
+
+  .card--waiting,
+  .card--error {
+    border-width: 2px;
+    padding: 9px 11px;
+  }
+
+  .plan-track {
+    border: 1px solid CanvasText;
+  }
+
+  .plan-fill {
+    forced-color-adjust: none;
+    background: Highlight;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Demo mode in a plain browser: frame the UI like the real window    */
+/* ------------------------------------------------------------------ */
+
+html.is-mock {
+  height: auto;
+  overflow: auto;
+}
+
+.is-mock body {
+  height: auto;
+  min-height: 100vh;
+  overflow: visible;
+  padding: 32px 16px;
+  background: var(--desk);
+}
+
+/* Outer size = the real window's inner size plus the 1px frame border. */
+.is-mock .app {
+  width: 382px;
+  max-width: 100%;
+  height: 562px;
+  margin: 0 auto;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+}
+
+.is-mock-wide .app {
+  width: 562px;
+}
+
+.is-mock.is-compact .app {
+  height: 46px;
+}
+
+.mock-caption {
+  max-width: 380px;
+  margin: 12px auto 0;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.mock-caption a {
+  color: var(--accent);
+}

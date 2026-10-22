@@ -1,0 +1,46 @@
+{
+  "sessionId": "local_22222222-3333-4444-8555-666666666666",
+  "cliSessionId": "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+  "title": "Agenda : cibles tactiles",
+  "titleSource": "auto",
+  "cwd": "D:\\Données Utilisateur\\Projets\\agenda",
+  "createdAt": 1792600000000,
+  "lastActivityAt": 1792600960000,
+  "lastFocusedAt": 1792600500000,
+  "lastTurnEdgeAt": 1792600940000,
+  "latestUserFrameAt": 1792600100000,
+  "completedTurns": 12,
+  "classifierSummaryEnabled": true,
+  "interruptedAwaitingPerson": null,
+  "lastAssistantUuid": "5869f4e0-9c82-4b15-9137-c8e2cadc1331",
+  "postTurnSummaryFor": "5869f4e0-9c82-4b15-9137-c8e2cadc1331",
+  "postTurnSummary": {
+    "status_category": "blocked",
+    "status_detail": "PR #311 ouverte ; attend ta décision",
+    "needs_action": "ta décision sur le ménage de la branche",
+    "summarizes_uuid": "5869f4e0-9c82-4b15-9137-c8e2cadc1331"
+  },
+  "error": "Your session credentials expired.",
+  "errorCategory": "auth_error",
+  "errorAt": 1792600950000,
+  "priorErrorMark": {
+    "source": "query_error",
+    "category": "process_interrupted",
+    "at": 1792600960000,
+    "hadPendingTurn": false
+  },
+  "queuedSideSessionNotes": [
+    {
+      "sessionId": "local_cc5b463c-4454-4fdc-b373-a46663f78260",
+      "title": "Fermer les fuites",
+      "report": "Oui, ma partie est terminée.",
+      "body": "<system-reminder>synthetic</system-reminder>",
+      "batch": 1,
+      "at": 1792600900000
+    },
+    {
+      "title": "sans identifiant",
+      "at": 1792600910000
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the main window's frontend may call",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:allow-start-dragging",
+    "allow-get-snapshot",
+    "allow-get-settings",
+    "allow-set-settings",
+    "allow-open-session",
+    "allow-ack-session",
+    "allow-set-compact",
+    "allow-set-always-on-top",
+    "allow-open-url",
+    "allow-hide-window",
+    "allow-quit-app"
+  ]
+}

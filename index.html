@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Sessions Claude</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <script type="module" src="/src/main.ts"></script>
+  </head>
+
+  <body>
+    <div id="app" class="app">
+      <header class="titlebar" data-tauri-drag-region>
+        <div id="summary" class="summary" data-tauri-drag-region>Connexion…</div>
+        <div class="titlebar-actions" data-tauri-drag-region>
+          <button id="btn-compact" class="icon-btn" type="button" aria-label="Passer en barre compacte" title="Barre compacte">
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path d="M4.5 3.5 8 6.5l3.5-3M4.5 12.5 8 9.5l3.5 3" />
+            </svg>
+          </button>
+          <button id="btn-pin" class="icon-btn" type="button" aria-label="Toujours au premier plan" aria-pressed="true" title="Toujours au premier plan">
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path class="pin-body" d="M9.6 2.4 13.6 6.4 11.9 7.1 9.5 9.5 9.1 12.2 3.8 6.9 6.5 6.5 8.9 4.1z" />
+              <path d="M6.4 9.6 2.5 13.5" />
+            </svg>
+          </button>
+          <button id="btn-hide" class="icon-btn" type="button" aria-label="Masquer la fenêtre" title="Masquer (reste dans la zone de notification)">
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path d="M3.5 8h9" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <div id="compact-bar" class="compact-bar" data-tauri-drag-region>
+        <span id="compact-dot" class="dot dot--none" aria-hidden="true" data-tauri-drag-region></span>
+        <button id="compact-open" class="compact-open" type="button" hidden>
+          <span id="compact-open-title" class="compact-open-title"></span>
+          <span id="compact-open-reason" class="compact-open-reason"></span>
+          <span id="compact-open-more" class="compact-more" hidden></span>
+        </button>
+        <span id="compact-notice" class="compact-notice" data-tauri-drag-region hidden></span>
+        <span id="compact-summary" class="compact-summary" data-tauri-drag-region>Connexion…</span>
+        <span class="compact-spacer" data-tauri-drag-region></span>
+        <button id="compact-warn" class="icon-btn compact-warn" type="button" hidden>
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <path d="M8 2.5 14.5 13.5h-13z" />
+            <path d="M8 6.5v3M8 11.5v.2" />
+          </svg>
+        </button>
+        <button id="btn-expand" class="icon-btn" type="button" aria-label="Afficher la liste des sessions" title="Agrandir">
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <path d="M4.5 6.5 8 3.5l3.5 3M4.5 9.5 8 12.5l3.5-3" />
+          </svg>
+        </button>
+      </div>
+
+      <main id="scroller" class="scroller" aria-label="Sessions" tabindex="-1">
+        <div id="cards" class="cards"></div>
+        <div id="empty" class="empty">
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <path d="M2.5 3.5h11v9h-11z" />
+            <path d="M5 6.5 7 8 5 9.5M8.5 10h2.5" />
+          </svg>
+          <p id="empty-title" class="empty-title">Connexion…</p>
+          <p id="empty-hint" class="empty-hint"></p>
+        </div>
+      </main>
+
+      <footer id="health" class="health" hidden></footer>
+
+      <!-- The only live region, outside both bars so compact mode announces too. -->
+      <div id="live" class="sr-only" role="status" aria-atomic="false"></div>
+    </div>
+  </body>
+</html>

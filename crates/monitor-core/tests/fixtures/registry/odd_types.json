@@ -1,0 +1,1 @@
+{"pid":"4242","sessionId":"00000000-0000-4000-8000-000000000004","cwd":42,"startedAt":"1700000000000","procStart":133444736000000000,"version":null,"kind":"","entrypoint":["claude-desktop"],"hostSessionId":{"id":"local_x"},"name":"  ","status":true,"waitingFor":"dialog open","updatedAt":1700000005000.0,"statusUpdatedAt":"not a number","unknownField":{"nested":[1,2,3]}}

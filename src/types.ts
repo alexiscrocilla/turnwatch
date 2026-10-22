@@ -1,0 +1,175 @@
+// Mirror of crates/monitor-core/src/model.rs (view model and settings only).
+// Any change there must be made here too. Timestamps are epoch milliseconds.
+
+export type SessionState = "waiting" | "error" | "unseen" | "working" | "idle";
+export type ChecksState = "pass" | "fail" | "pending" | "none";
+
+export interface ToolActivity {
+  name: string;
+  summary: string;
+  at: number | null;
+}
+
+export interface PlanItem {
+  content: string;
+  status: "pending" | "in_progress" | "completed" | string;
+}
+
+export interface PlanProgress {
+  items: PlanItem[];
+  done: number;
+  total: number;
+  current: string | null;
+  updatedAt: number | null;
+  /** wrap_up was called after the latest change. Information only: statuses
+   * are exactly Desktop's (wrap_up ticks nothing off). */
+  wrappedUp: boolean;
+}
+
+export interface GitInfo {
+  branch: string | null;
+  repoRoot: string | null;
+  dirtyFiles: number;
+  isDefaultBranch: boolean;
+  checkedAt: number;
+}
+
+export interface PrInfo {
+  number: number;
+  url: string;
+  title: string | null;
+  repository: string | null;
+  state: "OPEN" | "MERGED" | "CLOSED" | string;
+  isDraft: boolean;
+  reviewDecision: string | null;
+  checks: ChecksState;
+  mergeState: string | null;
+  checkedAt: number;
+  source: "desktop" | "gh-branch" | string;
+}
+
+export interface SessionRef {
+  hostSessionId: string;
+  title: string | null;
+}
+
+export interface PeerLink {
+  peerHostSessionId: string;
+  peerTitle: string | null;
+  sentAt: number;
+  deliveredAt: number | null;
+  readAt: number | null;
+}
+
+/** Question the session ended its turn on and that the user has not answered. */
+export interface PendingQuestion {
+  text: string;
+  /** Labels of the answer buttons, if any. */
+  options: string[];
+  source: "wrap_up" | "desktop" | "text" | string;
+  at: number | null;
+}
+
+export interface MessageSummary {
+  awaitingReply: PeerLink[];
+  undelivered: PeerLink[];
+  unreadInbound: PeerLink[];
+}
+
+export interface SessionView {
+  key: string;
+  hostSessionId: string | null;
+  cliSessionId: string;
+  pid: number;
+  isDesktop: boolean;
+  /** Desktop title, else registry name, else folder name. */
+  title: string;
+  project: string;
+  cwd: string;
+  worktree: string | null;
+  state: SessionState;
+  /** Registry reason ("input needed", "permission prompt", "sandbox request",
+   * "worker request", "dialog open"), "decision" (turn ended on a question) or
+   * "probable question" (last message ends with a question mark). */
+  waitingFor: string | null;
+  question: PendingQuestion | null;
+  stateSince: number | null;
+  /** Shown in a pane of the Claude Desktop window while it is in front. */
+  onScreen: boolean;
+  model: string | null;
+  effort: string | null;
+  permissionMode: string | null;
+  completedTurns: number | null;
+  lastActivityAt: number | null;
+  /** Plain text: Desktop's wrap-up, else the transcript's wrap-up recap,
+   * else Desktop's fresh summary, else lastTurnReport, else the last message. */
+  recap: string | null;
+  activity: ToolActivity | null;
+  /** Null when the list belongs to an earlier prompt of the person. */
+  plan: PlanProgress | null;
+  git: GitInfo | null;
+  pr: PrInfo | null;
+  messages: MessageSummary;
+  parent: SessionRef | null;
+  contextExceededCount: number | null;
+  lastError: string | null;
+  version: string | null;
+}
+
+export interface Counts {
+  total: number;
+  waiting: number;
+  error: number;
+  unseen: number;
+  working: number;
+  idle: number;
+  prOpen: number;
+  prFailing: number;
+  messagesPending: number;
+}
+
+export interface SourceHealth {
+  registryOk: boolean;
+  desktopOk: boolean;
+  ghOk: boolean | null;
+  errors: string[];
+}
+
+export interface Snapshot {
+  generatedAt: number;
+  /** False until the engine's first pass: an empty list then means "not read yet". */
+  ready: boolean;
+  /** Increases with every published snapshot: order by this, not generatedAt. */
+  seq: number;
+  sessions: SessionView[];
+  counts: Counts;
+  health: SourceHealth;
+}
+
+export interface Settings {
+  notifyOnWaiting: boolean;
+  notifyOnFinished: boolean;
+  notifyOnError: boolean;
+  includeCliSessions: boolean;
+  prPollSecs: number;
+  messageWindowHours: number;
+  compact: boolean;
+  alwaysOnTop: boolean;
+}
+
+// Tauri commands (src-tauri/src/lib.rs) and events, shared by both sides.
+export const EVENT_SNAPSHOT = "snapshot"; // payload: Snapshot
+export const EVENT_SETTINGS = "settings"; // payload: Settings
+export const EVENT_VISIBILITY = "visibility"; // payload: boolean, the window was shown (true) or hidden to the tray (false)
+export const CMD = {
+  getSnapshot: "get_snapshot", // () -> Snapshot
+  getSettings: "get_settings", // () -> Settings
+  setSettings: "set_settings", // ({ settings }) -> Settings
+  openSession: "open_session", // ({ key }) -> void; focuses the session in Claude Desktop (error for non-Desktop keys)
+  ackSession: "ack_session", // ({ key }) -> void
+  setCompact: "set_compact", // ({ compact }) -> Settings; resizes the window
+  setAlwaysOnTop: "set_always_on_top", // ({ value }) -> Settings
+  openUrl: "open_url", // ({ url }) -> void; https only
+  hideWindow: "hide_window", // () -> void; stays in the tray
+  quitApp: "quit_app", // () -> void
+} as const;

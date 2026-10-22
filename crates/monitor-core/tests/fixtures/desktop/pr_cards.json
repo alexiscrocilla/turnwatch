@@ -1,0 +1,40 @@
+{
+  "sessionId": "local_00000000-0000-4000-8000-000000000004",
+  "title": "Session whose PRs are only in the card list",
+  "isArchived": false,
+  "prs": [
+    {
+      "prNumber": 10,
+      "repo": "example/demo-app",
+      "host": "github.com",
+      "provider": "github",
+      "url": "https://github.com/example/demo-app/pull/10",
+      "branch": "claude/first",
+      "state": "MERGED",
+      "baseRef": "main",
+      "own": true,
+      "dismissed": true
+    },
+    {
+      "prNumber": 12,
+      "repo": "example/demo-app",
+      "host": "github.com",
+      "provider": "github",
+      "url": "https://github.com/example/demo-app/pull/12",
+      "branch": "claude/second",
+      "state": "OPEN",
+      "baseRef": "main",
+      "own": true
+    },
+    {
+      "prNumber": 11,
+      "repo": "example/demo-app",
+      "url": "https://github.com/example/demo-app/pull/11",
+      "branch": "claude/third",
+      "state": "MERGED",
+      "baseRef": "main"
+    },
+    { "repo": "example/demo-app", "state": "OPEN" },
+    "garbage"
+  ]
+}
