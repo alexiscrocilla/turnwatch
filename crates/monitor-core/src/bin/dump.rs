@@ -6,7 +6,9 @@ use std::process::ExitCode;
 use std::thread;
 
 use monitor_core::engine::Engine;
-use monitor_core::model::{SessionState, SessionView, Settings, Snapshot, Transition};
+use monitor_core::model::{
+    QuotaWindow, SessionState, SessionView, Settings, Snapshot, Transition,
+};
 
 const USAGE: &str = "\
 Usage : dump [--summary] [--watch] [--all]
@@ -153,8 +155,45 @@ fn summary_lines(snapshot: &Snapshot) -> Vec<String> {
         gh,
     )];
     lines.extend(h.errors.iter().map(|e| format!("! {e}")));
+    lines.extend(quota_line(snapshot));
     lines.extend(snapshot.sessions.iter().map(session_line));
     lines
+}
+
+/// `quota | relevé il y a … | 5 h … | 7 j …`, times relative to the snapshot.
+fn quota_line(snapshot: &Snapshot) -> Option<String> {
+    let quota = snapshot.quota.as_ref()?;
+    let now = snapshot.generated_at;
+    let window = |label: &str, w: Option<&QuotaWindow>| match w {
+        None => format!("{label} -"),
+        Some(w) if w.expired => format!("{label} {} % (réinitialisé depuis)", w.percent),
+        Some(w) => match w.resets_at {
+            Some(at) => format!(
+                "{label} {} % réinit. dans {} ±{}",
+                w.percent,
+                duration(at - now),
+                duration(w.reset_margin_ms)
+            ),
+            None => format!("{label} {} % réinit. inconnue", w.percent),
+        },
+    };
+    Some(format!(
+        "quota | relevé il y a {} | {} | {}",
+        duration(now - quota.sampled_at),
+        window("5 h", quota.five_hour.as_ref()),
+        window("7 j", quota.seven_day.as_ref()),
+    ))
+}
+
+/// "45 min", "4 h 12", "2 j 3 h".
+fn duration(ms: i64) -> String {
+    let minutes = ms.max(0) / 60_000;
+    let (days, hours, mins) = (minutes / 1440, minutes / 60 % 24, minutes % 60);
+    match (days, hours) {
+        (0, 0) => format!("{mins} min"),
+        (0, _) => format!("{hours} h {mins:02}"),
+        _ => format!("{days} j {hours} h"),
+    }
 }
 
 /// `state | title | project/worktree @branch | waiting_for « question » | plan

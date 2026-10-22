@@ -41,10 +41,11 @@ pnpm tauri dev
 ## Utilisation
 
 - **En-tête** : le résumé (« 1 t'attend · 4 au travail · 2 non vues »), puis trois boutons : mode compact, épingler au premier plan, masquer. Faire glisser l'en-tête déplace la fenêtre.
-- **Mode compact** : la fenêtre se réduit à une ligne de 44 px qui montre la session qui t'attend, sinon le résumé.
+- **Quota** : sous l'en-tête, une jauge par fenêtre du forfait, 5 heures et 7 jours. Le remplissage montre la part utilisée (ambre dès 75 %, rouge dès 90 %), le trait vertical la part du temps écoulé dans la fenêtre : une jauge qui dépasse son trait consomme plus vite qu'un rythme régulier. Suivent le pourcentage et l'heure (ou le jour) de réinitialisation estimée. L'infobulle donne le détail et l'heure du relevé. Si le dernier relevé date de plus d'une heure, la bande l'indique (« il y a 3 h ») ; une fenêtre réinitialisée depuis affiche « — ».
+- **Mode compact** : la fenêtre se réduit à une ligne de 44 px qui montre la session qui t'attend, sinon le résumé. Dès qu'une fenêtre du quota atteint 80 %, une pastille l'indique à droite (« 5 h 82 % »).
 - **Clic sur une carte** : ouvre cette session dans Claude Desktop (lien `claude://code/continue?session=local_…`, le même que celui de la liste de raccourcis de Desktop) et la marque comme vue.
 - **Clic sur la pastille de PR** : ouvre la PR dans le navigateur.
-- **Icône de la zone de notification** : sa couleur suit la session la plus urgente, et son infobulle donne le résumé. Un clic affiche ou masque la fenêtre. Le menu permet de changer les réglages et de quitter. Masquer la fenêtre ne ferme pas l'application.
+- **Icône de la zone de notification** : sa couleur suit la session la plus urgente, et son infobulle donne le résumé, puis le quota sur une seconde ligne. Un clic affiche ou masque la fenêtre. Le menu permet de changer les réglages et de quitter. Masquer la fenêtre ne ferme pas l'application.
 
 ### États
 
@@ -62,6 +63,7 @@ Comment ces états sont décidés :
 - **Erreur** suit les champs d'erreur de Desktop sur 7 jours. Un simple redémarrage de Desktop ne compte pas. Elle s'efface à ton prochain message.
 - **Non vue** se remet à zéro quand tu cliques la carte, ou quand la session est visible dans un volet de Claude Desktop (vue partagée comprise) resté au premier plan au moins une seconde. Les sessions déjà vues sont mémorisées dans `acks.json` et survivent à un redémarrage de l'application. Un tour lancé par une autre session ne rend pas une session « non vue », sauf s'il a produit un résultat.
 - La liste de tâches reprend exactement les statuts affichés par Desktop.
+- **Quota** : Claude Desktop relève l'usage du forfait auprès de claude.ai toutes les 5 à 30 minutes quand il est ouvert, et garde 30 jours d'historique. L'historique ne contient que des pourcentages, sans heure de réinitialisation : le moniteur la déduit des baisses. La fenêtre de 5 h commence au premier usage après la fin de la précédente ; son heure n'est donnée que si l'historique la situe à 30 minutes près. La fenêtre de 7 jours se réinitialise à heure fixe chaque semaine : les baisses des semaines précédentes, décalées d'une semaine, se recoupent et précisent ce créneau (une réinitialisation exceptionnelle hors calendrier est ignorée) ; il n'est donné qu'à 6 heures près.
 - **Sessions en pause** : Claude Desktop ne garde qu'un nombre limité de processus en vie (6 au minimum, davantage selon la mémoire) et arrête les sessions inactives au-delà, ou quand la mémoire manque. Une session sans processus reste listée tant qu'elle attend, est en erreur ou non vue, si son dernier tour ou sa dernière activité date de moins de 7 jours. Son état est déduit du fichier de Desktop et du transcript, comme pour les autres. Son infobulle indique « En pause », et un clic l'ouvre dans Desktop comme d'habitude. Une session en pause et inactive n'est pas listée.
 
 ## D'où viennent les données
@@ -74,6 +76,7 @@ Tout est lu sur la machine, en lecture seule. Le seul accès réseau passe par `
 | `%APPDATA%\Claude\claude-code-sessions\…\local_<id>.json` | Titre, archivage, dernier passage, résumé du tour, PR liée par Desktop, messages entre sessions, session parente | Non |
 | `~\.claude\projects\…\<id>.jsonl` | Outil en cours, liste de tâches, question de fin de tour, erreurs d'API, branche, dernier message | Non |
 | `%APPDATA%\Claude\claude_desktop_config.json` | Sessions affichées dans les volets de Desktop | Non |
+| `%APPDATA%\Claude\plan-usage-history.json` | Quota du forfait (fenêtres de 5 h et de 7 jours), tel que Desktop l'a relevé | Non |
 | `git` dans le dossier de la session | Branche, fichiers non commités | Oui |
 | `gh pr view` / `gh pr list --head` | État de la PR, CI, relecture | Oui |
 
@@ -114,6 +117,7 @@ Elle ne modifie rien dans `~\.claude` ni dans les dossiers de Claude Desktop.
 - Les questions détectées par Desktop ou par le « ? » final disparaissent quand une autre session ou une tâche relance celle-ci. Les questions à boutons, elles, restent jusqu'à ton message.
 - Les sessions cloud lancées depuis Desktop n'ont pas de trace locale et n'apparaissent pas.
 - Une session en pause dont le dernier tour date de plus de 7 jours n'apparaît plus, même si sa question est restée sans réponse.
+- Le quota n'est relevé que quand Claude Desktop est ouvert, au plus toutes les 5 minutes : la jauge peut retarder de quelques minutes sur l'usage réel. Ses heures de réinitialisation sont des estimations tirées de l'historique ; elles manquent tant que l'historique ne montre pas de réinitialisation assez nette.
 - Les builds de développement utilisent l'identifiant `local.claude-session-monitor.dev` et peuvent tourner à côté de la version release.
 
 ## Structure
@@ -125,6 +129,7 @@ crates/monitor-core/   Logique, sans dépendance à Tauri
   src/transcript.rs    Lecture incrémentale des transcripts
   src/git_pr.rs        git et gh, sur un fil d'exécution à part
   src/aggregate.rs     Fusion des sources, règles d'état, tri
+  src/usage.rs         Historique du quota et estimation des réinitialisations
   src/engine.rs        Surveillance des dossiers et reconstruction de l'instantané
   src/bin/dump.rs      Outil de diagnostic en ligne de commande
 src-tauri/             Fenêtre, icône, notifications, commandes

@@ -3,7 +3,7 @@
 
 use std::sync::Mutex;
 
-use monitor_core::model::{Counts, Settings};
+use monitor_core::model::{Counts, Quota, QuotaWindow, Settings};
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -99,7 +99,7 @@ pub fn create(
 
     let empty = Counts::default();
     let color = dot_color(&empty);
-    let tooltip_text = tooltip(&empty);
+    let tooltip_text = tooltip(&empty, None);
     let tray = TrayIconBuilder::with_id(TRAY_ID)
         .icon(dot_icon(color))
         .tooltip(&tooltip_text)
@@ -150,9 +150,9 @@ pub fn sync_checks(app: &AppHandle, settings: &Settings) {
 
 /// Updates the icon color and the tooltip. Never blocks: the change is posted
 /// to the main thread.
-pub fn update(app: &AppHandle, counts: &Counts) {
+pub fn update(app: &AppHandle, counts: &Counts, quota: Option<&Quota>) {
     let color = dot_color(counts);
-    let text = tooltip(counts);
+    let text = tooltip(counts, quota);
     {
         let Some(handles) = app.try_state::<TrayHandles>() else {
             return;
@@ -189,8 +189,36 @@ pub fn dot_color(counts: &Counts) -> [u8; 3] {
     }
 }
 
-/// French one-line summary, at most 127 characters.
-pub fn tooltip(counts: &Counts) -> String {
+/// French summary, at most 127 characters: the sessions, then the quota on
+/// a second line when Desktop recorded one.
+pub fn tooltip(counts: &Counts, quota: Option<&Quota>) -> String {
+    let sessions = sessions_line(counts);
+    let text = match quota.and_then(quota_line) {
+        Some(quota) => format!("{sessions}\n{quota}"),
+        None => sessions,
+    };
+    truncate_chars(&text, TOOLTIP_MAX_CHARS)
+}
+
+/// "Quota : 5 h 19 % · 7 j 28 %", the windows that reset since the latest
+/// sample left out.
+fn quota_line(quota: &Quota) -> Option<String> {
+    let part = |label: &str, window: Option<&QuotaWindow>| {
+        window
+            .filter(|w| !w.expired)
+            .map(|w| format!("{label} {} %", w.percent.round()))
+    };
+    let parts: Vec<String> = [
+        part("5 h", quota.five_hour.as_ref()),
+        part("7 j", quota.seven_day.as_ref()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    (!parts.is_empty()).then(|| format!("Quota : {}", parts.join(" · ")))
+}
+
+fn sessions_line(counts: &Counts) -> String {
     if counts.total == 0 {
         return "Aucune session".to_owned();
     }
@@ -220,7 +248,7 @@ pub fn tooltip(counts: &Counts) -> String {
         };
         parts.push(format!("{} {label}", counts.total));
     }
-    truncate_chars(&parts.join(" · "), TOOLTIP_MAX_CHARS)
+    parts.join(" · ")
 }
 
 fn truncate_chars(text: &str, max: usize) -> String {
@@ -282,13 +310,37 @@ mod tests {
 
     #[test]
     fn tooltip_matches_examples() {
-        assert_eq!(tooltip(&Counts::default()), "Aucune session");
+        assert_eq!(tooltip(&Counts::default(), None), "Aucune session");
         let mut c = counts(1, 0, 2, 4, 3);
         c.pr_open = 2;
-        assert_eq!(tooltip(&c), "1 t'attend · 4 au travail · 2 non vues · 2 PR");
-        assert_eq!(tooltip(&counts(2, 1, 1, 0, 0)), "2 t'attendent · 1 en erreur · 1 non vue");
-        assert_eq!(tooltip(&counts(0, 0, 0, 0, 3)), "3 sessions au repos");
-        assert_eq!(tooltip(&counts(0, 0, 0, 0, 1)), "1 session au repos");
+        assert_eq!(tooltip(&c, None), "1 t'attend · 4 au travail · 2 non vues · 2 PR");
+        assert_eq!(tooltip(&counts(2, 1, 1, 0, 0), None), "2 t'attendent · 1 en erreur · 1 non vue");
+        assert_eq!(tooltip(&counts(0, 0, 0, 0, 3), None), "3 sessions au repos");
+        assert_eq!(tooltip(&counts(0, 0, 0, 0, 1), None), "1 session au repos");
+    }
+
+    fn window(percent: f64, expired: bool) -> Option<QuotaWindow> {
+        Some(QuotaWindow {
+            percent,
+            expired,
+            ..QuotaWindow::default()
+        })
+    }
+
+    #[test]
+    fn tooltip_adds_the_quota_on_a_second_line() {
+        let mut quota = Quota {
+            sampled_at: 1,
+            five_hour: window(19.4, false),
+            seven_day: window(27.6, false),
+        };
+        let c = counts(0, 0, 0, 1, 0);
+        assert_eq!(tooltip(&c, Some(&quota)), "1 au travail\nQuota : 5 h 19 % · 7 j 28 %");
+        // A window that reset since the latest sample is left out.
+        quota.five_hour = window(82.0, true);
+        assert_eq!(tooltip(&c, Some(&quota)), "1 au travail\nQuota : 7 j 28 %");
+        quota.seven_day = None;
+        assert_eq!(tooltip(&c, Some(&quota)), "1 au travail");
     }
 
     #[test]
@@ -297,7 +349,7 @@ mod tests {
         c.total = u32::MAX;
         let long = truncate_chars(&"é".repeat(300), TOOLTIP_MAX_CHARS);
         assert_eq!(long.chars().count(), TOOLTIP_MAX_CHARS);
-        assert!(tooltip(&c).chars().count() <= TOOLTIP_MAX_CHARS);
+        assert!(tooltip(&c, None).chars().count() <= TOOLTIP_MAX_CHARS);
     }
 
     #[test]

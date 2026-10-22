@@ -109,6 +109,8 @@ pub fn build_snapshot(input: &AggregateInput) -> Snapshot {
         sessions,
         counts,
         health: input.health.clone(),
+        // Not a session matter: the engine adds it.
+        quota: None,
     }
 }
 

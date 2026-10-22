@@ -41,6 +41,12 @@ pub fn desktop_config_file() -> PathBuf {
     desktop_data_dir().join("claude_desktop_config.json")
 }
 
+/// Plan usage samples Desktop records:
+/// `%APPDATA%\Claude\plan-usage-history.json`.
+pub fn usage_history_file() -> PathBuf {
+    desktop_data_dir().join("plan-usage-history.json")
+}
+
 pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -345,6 +345,39 @@ pub struct Snapshot {
     pub sessions: Vec<SessionView>,
     pub counts: Counts,
     pub health: SourceHealth,
+    /// Plan usage, None when Claude Desktop recorded none.
+    pub quota: Option<Quota>,
+}
+
+/// Plan usage, from the history Claude Desktop keeps
+/// (`%APPDATA%\Claude\plan-usage-history.json`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Quota {
+    /// When Desktop recorded the latest sample.
+    pub sampled_at: i64,
+    /// The 5-hour window.
+    pub five_hour: Option<QuotaWindow>,
+    /// The 7-day window.
+    pub seven_day: Option<QuotaWindow>,
+}
+
+/// One usage window of the plan, as of the latest sample.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaWindow {
+    /// Percent used.
+    pub percent: f64,
+    /// Length of the window: 5 hours or 7 days.
+    pub length_ms: i64,
+    /// Estimated end of the current window, the middle of the range the
+    /// history allows. None when nothing is used, or when the history cannot
+    /// place it closely enough.
+    pub resets_at: Option<i64>,
+    /// Half the width of that range.
+    pub reset_margin_ms: i64,
+    /// The window reset after the latest sample: `percent` is out of date.
+    pub expired: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

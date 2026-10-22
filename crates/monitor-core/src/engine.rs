@@ -16,12 +16,13 @@ use crate::aggregate::{self, AggregateInput};
 use crate::desktop::DesktopIndex;
 use crate::git_pr::{GitPrRequest, GitPrService};
 use crate::model::{
-    DesktopSession, GitInfo, PrInfo, RegistryEntry, SessionState, Settings, Snapshot,
+    DesktopSession, GitInfo, PrInfo, Quota, RegistryEntry, SessionState, Settings, Snapshot,
     SourceHealth, TranscriptInfo, Transition,
 };
 use crate::paths;
 use crate::registry;
 use crate::transcript::TranscriptTracker;
+use crate::usage::{self, History};
 
 pub type SnapshotSink = Box<dyn Fn(&Snapshot, &[Transition]) + Send + 'static>;
 
@@ -210,11 +211,13 @@ impl Engine {
         let mut errors = Vec::new();
         let now = paths::now_ms();
         let pass = readers.read(&paths, settings, now, &mut errors);
+        let quota = read_quota(&mut UsageReader::new(paths.usage_history.clone()), now, &mut errors);
         let empty = BuildState {
             git_pr: &HashMap::new(),
             acks: &HashMap::new(),
             on_screen: &HashSet::new(),
             turn_ended_at: &HashMap::new(),
+            quota: quota.as_ref(),
         };
         let (mut snapshot, _) = build(&pass, &empty, settings, None, errors, now, None);
         snapshot.ready = true;
@@ -242,6 +245,7 @@ struct Paths {
     desktop_root: PathBuf,
     projects: PathBuf,
     desktop_config: PathBuf,
+    usage_history: PathBuf,
 }
 
 impl Paths {
@@ -251,6 +255,7 @@ impl Paths {
             desktop_root: paths::desktop_sessions_root(),
             projects: paths::projects_dir(),
             desktop_config: paths::desktop_config_file(),
+            usage_history: paths::usage_history_file(),
         }
     }
 }
@@ -403,6 +408,7 @@ struct Worker {
     turns: TurnTracker,
     screen: ScreenTracker,
     panes: PaneReader,
+    usage: UsageReader,
 }
 
 fn run_worker(
@@ -446,6 +452,7 @@ fn run_worker(
         Err(msg) => (None, Some(internal_error("Service Git/PR", &msg))),
     };
     let panes = PaneReader::new(paths.desktop_config.clone());
+    let usage = UsageReader::new(paths.usage_history.clone());
     let mut worker = Worker {
         shared,
         tx,
@@ -463,6 +470,7 @@ fn run_worker(
         turns: TurnTracker::default(),
         screen: ScreenTracker::default(),
         panes,
+        usage,
     };
 
     worker.load_acks();
@@ -660,12 +668,14 @@ impl Worker {
             shared.acks.clone()
         };
 
+        let quota = read_quota(&mut self.usage, now, &mut errors);
         let prev = lock(&self.shared).last.clone();
         let state = BuildState {
             git_pr: &git_pr,
             acks: &acks,
             on_screen: &on_screen,
             turn_ended_at: &self.turns.ended_at,
+            quota: quota.as_ref(),
         };
         let (mut next, built) = build(&pass, &state, &settings, gh_ok, errors, now, prev.as_ref());
         next.ready = true;
@@ -722,6 +732,7 @@ struct BuildState<'a> {
     acks: &'a HashMap<String, i64>,
     on_screen: &'a HashSet<String>,
     turn_ended_at: &'a HashMap<String, i64>,
+    quota: Option<&'a Quota>,
 }
 
 /// Builds the snapshot, falling back to the previous sessions with an error
@@ -753,7 +764,7 @@ fn build(
         settings,
         health: health.clone(),
     };
-    match guarded(|| aggregate::build_snapshot(&input)) {
+    let (mut snapshot, built) = match guarded(|| aggregate::build_snapshot(&input)) {
         Ok(snapshot) => (snapshot, true),
         Err(msg) => {
             let mut snapshot = prev.cloned().unwrap_or_default();
@@ -765,7 +776,21 @@ fn build(
                 .push(internal_error("Agrégation", &msg));
             (snapshot, false)
         }
-    }
+    };
+    snapshot.quota = state.quota.cloned();
+    (snapshot, built)
+}
+
+/// The plan's usage from Desktop's history, None without one.
+fn read_quota(reader: &mut UsageReader, now: i64, errors: &mut Vec<String>) -> Option<Quota> {
+    let history = guarded(|| reader.read().cloned()).unwrap_or_else(|msg| {
+        errors.push(internal_error("Quota", &msg));
+        None
+    })?;
+    guarded(|| usage::quota(&history, now)).unwrap_or_else(|msg| {
+        errors.push(internal_error("Quota", &msg));
+        None
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1289,6 +1314,47 @@ impl PaneReader {
     }
 }
 
+/// Desktop's plan usage history. Re-read only when the file's time or size
+/// changes; a file that cannot be read or parsed for a moment keeps the last
+/// history read, and is read again on the next pass.
+struct UsageReader {
+    path: PathBuf,
+    stamp: Option<(SystemTime, u64)>,
+    history: Option<History>,
+}
+
+impl UsageReader {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            stamp: None,
+            history: None,
+        }
+    }
+
+    /// None when there is no history file.
+    fn read(&mut self) -> Option<&History> {
+        let Some(stamp) = file_stamp(&self.path) else {
+            self.stamp = None;
+            self.history = None;
+            return None;
+        };
+        if self.stamp != Some(stamp) {
+            let parsed = std::fs::read(&self.path)
+                .ok()
+                .and_then(|bytes| usage::parse_history(&String::from_utf8_lossy(&bytes)));
+            match parsed {
+                Some(history) => {
+                    self.history = Some(history);
+                    self.stamp = Some(stamp);
+                }
+                None => self.stamp = None,
+            }
+        }
+        self.history.as_ref()
+    }
+}
+
 fn file_stamp(path: &Path) -> Option<(SystemTime, u64)> {
     let meta = std::fs::metadata(path).ok()?;
     Some((meta.modified().unwrap_or(SystemTime::UNIX_EPOCH), meta.len()))
@@ -1541,8 +1607,13 @@ fn same_content(a: &Snapshot, b: &Snapshot) -> bool {
         sessions,
         counts,
         health,
+        quota,
     } = a;
-    *ready == b.ready && *sessions == b.sessions && *counts == b.counts && *health == b.health
+    *ready == b.ready
+        && *sessions == b.sessions
+        && *counts == b.counts
+        && *health == b.health
+        && *quota == b.quota
 }
 
 /// Forgets acks of sessions that are neither live nor known to Desktop.
@@ -1704,6 +1775,7 @@ mod tests {
             desktop_root: root.join("desktop"),
             projects: root.join("projects"),
             desktop_config: root.join("config.json"),
+            usage_history: root.join("plan-usage-history.json"),
         };
         let worker = Worker {
             shared: Arc::new(Mutex::new(Shared {
@@ -1713,6 +1785,7 @@ mod tests {
             tx,
             sink,
             panes: PaneReader::new(paths.desktop_config.clone()),
+            usage: UsageReader::new(paths.usage_history.clone()),
             paths,
             watches: Vec::new(),
             readers: Readers::default(),
@@ -2135,11 +2208,16 @@ mod tests {
                 ..Counts::default()
             },
             health: SourceHealth::default(),
+            quota: None,
         };
         let mut b = a.clone();
         b.generated_at = 2;
         b.seq = 7;
         assert!(same_content(&a, &b));
+
+        let mut q = b.clone();
+        q.quota = Some(Quota::default());
+        assert!(!same_content(&a, &q));
 
         let mut c = b.clone();
         c.sessions[0].state = SessionState::Unseen;
@@ -2246,6 +2324,53 @@ mod tests {
         assert_eq!(reader.read().map(<[String]>::len), Some(2));
         std::fs::remove_file(&path).expect("remove");
         assert_eq!(reader.read(), None);
+    }
+
+    #[test]
+    fn usage_reader_keeps_the_last_history_while_the_file_is_rewritten() {
+        let dir = TempDir::new("usage");
+        let path = dir.0.join("plan-usage-history.json");
+        let mut reader = UsageReader::new(path.clone());
+        assert_eq!(reader.read(), None, "no file");
+        let full = r#"{"version":2,"samples":[{"t":1000,"org":"o","u":{"fh":19,"sd":26}}]}"#;
+        dir.write("plan-usage-history.json", full);
+        let points = |r: &mut UsageReader| r.read().map(|h| (h.five_hour.len(), h.seven_day.len()));
+        assert_eq!(points(&mut reader), Some((1, 1)));
+        dir.write("plan-usage-history.json", &full[..full.len() / 2]);
+        assert_eq!(points(&mut reader), Some((1, 1)), "caught mid-write");
+        assert_eq!(reader.stamp, None);
+        std::fs::remove_file(&path).expect("remove");
+        assert_eq!(reader.read(), None);
+    }
+
+    #[test]
+    fn snapshots_carry_the_quota() {
+        let dir = TempDir::new("quota");
+        let now = paths::now_ms();
+        let (mut worker, published) = test_worker(&dir.0, None);
+        worker.recompute(false);
+        dir.write(
+            "plan-usage-history.json",
+            &serde_json::json!({
+                "version": 2,
+                "samples": [
+                    {"t": now - 20 * 60_000, "org": "o", "u": {"fh": 80, "sd": 20}},
+                    {"t": now - 5 * 60_000, "org": "o", "u": {"fh": 2, "sd": 21}}
+                ]
+            })
+            .to_string(),
+        );
+        worker.recompute(false);
+
+        let published = lock(&published);
+        assert_eq!(published.len(), 2, "the quota alone makes a new snapshot");
+        assert_eq!(published[0].0.quota, None);
+        let quota = published[1].0.quota.as_ref().expect("quota");
+        assert_eq!(quota.sampled_at, now - 5 * 60_000);
+        let five = quota.five_hour.as_ref().expect("5 h");
+        assert_eq!(five.percent, 2.0);
+        assert_eq!(five.resets_at, Some(now - 12 * 60_000 - 30_000 + 5 * 3_600_000));
+        assert_eq!(quota.seven_day.as_ref().map(|w| w.percent), Some(21.0));
     }
 
     fn pass_with<'a>(

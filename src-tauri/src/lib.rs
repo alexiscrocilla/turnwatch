@@ -419,7 +419,7 @@ fn snapshot_sink(
         feed.publish(|| {
             let _ = app.emit(EVENT_SNAPSHOT, snapshot);
         });
-        tray::update(&app, &snapshot.counts);
+        tray::update(&app, &snapshot.counts, snapshot.quota.as_ref());
 
         let current = lock(&settings).clone();
         let selected = lock(&notifier).select(transitions, snapshot, &current, now_ms());

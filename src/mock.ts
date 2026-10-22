@@ -10,6 +10,7 @@ import type {
   PendingQuestion,
   PlanProgress,
   PrInfo,
+  Quota,
   SessionState,
   SessionView,
   Settings,
@@ -151,6 +152,28 @@ const notReadySnapshot = (): Snapshot => ({
   sessions: [],
   counts: countSessions([]),
   health: { registryOk: false, desktopOk: false, ghOk: null, errors: [] },
+  quota: null,
+});
+
+const HOUR_MS = 3_600_000;
+
+/** A 5-hour window well used (amber), a week barely started. */
+const mockQuota = (): Quota => ({
+  sampledAt: ago(4 * 60),
+  fiveHour: {
+    percent: 82,
+    lengthMs: 5 * HOUR_MS,
+    resetsAt: Date.now() + 72 * 60_000,
+    resetMarginMs: 7 * 60_000,
+    expired: false,
+  },
+  sevenDay: {
+    percent: 28,
+    lengthMs: 7 * 24 * HOUR_MS,
+    resetsAt: Date.now() + 6 * 24 * HOUR_MS,
+    resetMarginMs: 150 * 60_000,
+    expired: false,
+  },
 });
 
 function link(peerKey: string, peerTitle: string, sentSecondsAgo: number, delivered: boolean): PeerLink {
@@ -456,6 +479,7 @@ export function createMockBackend(): MockBackend {
   let settings: Settings = { ...MOCK_SETTINGS };
   let sessions: SessionView[] = scenario === "empty" ? [] : initialSessions();
   let health: SourceHealth = scenario === "health" ? brokenHealth() : okHealth();
+  const quota: Quota | null = scenario === "empty" ? null : mockQuota();
   let ready = false;
   /** Increases with every published snapshot, like the engine's. */
   let seq = 0;
@@ -479,6 +503,7 @@ export function createMockBackend(): MockBackend {
           sessions: sortSessions(sessions),
           counts: countSessions(sessions),
           health,
+          quota,
         }
       : notReadySnapshot();
 

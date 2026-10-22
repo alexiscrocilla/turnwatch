@@ -10,6 +10,8 @@ import type {
   PendingQuestion,
   PlanProgress,
   PrInfo,
+  Quota,
+  QuotaWindow,
   SessionState,
   SessionView,
   Settings,
@@ -320,6 +322,29 @@ function countSessions(sessions: readonly SessionView[], raw: unknown): Counts {
   return counts;
 }
 
+function sanitizeWindow(v: unknown): QuotaWindow | null {
+  if (!isObj(v)) return null;
+  const percent = num(v.percent);
+  const lengthMs = num(v.lengthMs);
+  if (percent === null || lengthMs === null || lengthMs <= 0) return null;
+  return {
+    percent: Math.max(percent, 0),
+    lengthMs,
+    resetsAt: num(v.resetsAt),
+    resetMarginMs: Math.max(num(v.resetMarginMs) ?? 0, 0),
+    expired: v.expired === true,
+  };
+}
+
+function sanitizeQuota(v: unknown): Quota | null {
+  if (!isObj(v)) return null;
+  const sampledAt = num(v.sampledAt);
+  const fiveHour = sanitizeWindow(v.fiveHour);
+  const sevenDay = sanitizeWindow(v.sevenDay);
+  if (sampledAt === null || (!fiveHour && !sevenDay)) return null;
+  return { sampledAt, fiveHour, sevenDay };
+}
+
 function sanitizeSnapshot(raw: unknown): Snapshot | null {
   if (!isObj(raw)) return null;
   const seen = new Set<string>();
@@ -340,6 +365,7 @@ function sanitizeSnapshot(raw: unknown): Snapshot | null {
     sessions,
     counts: countSessions(sessions, raw.counts),
     health: sanitizeHealth(raw.health),
+    quota: sanitizeQuota(raw.quota),
   };
 }
 
@@ -448,6 +474,8 @@ const root = document.documentElement;
 const ui = {
   app: byId("app"),
   summary: byId("summary"),
+  quota: byId("quota"),
+  compactQuota: byId("compact-quota"),
   btnCompact: byId<HTMLButtonElement>("btn-compact"),
   btnPin: byId<HTMLButtonElement>("btn-pin"),
   btnHide: byId<HTMLButtonElement>("btn-hide"),
@@ -653,6 +681,7 @@ function scheduleRender(): void {
 function render(): void {
   const rows = healthRows();
   renderSummary();
+  renderQuota();
   renderCompact(rows);
   // Hidden while compact: brought up to date when the mode changes.
   if (!settings.compact) renderList();
@@ -842,6 +871,179 @@ function renderLive(rows: readonly HealthRow[]): void {
     // A trailing space keeps the parts apart when read as one text.
     setText(span, text ? `${text} ` : "");
   });
+}
+
+// ---------------------------------------------------------------------------
+// Plan quota: one gauge per window under the title bar, a chip when compact
+// ---------------------------------------------------------------------------
+
+/** The latest sample is older than this: shown as out of date. */
+const QUOTA_STALE_MS = 60 * 60_000;
+/** From these percents on, a window turns amber, then red. */
+const QUOTA_WARN = 75;
+const QUOTA_HIGH = 90;
+/** The compact bar shows the fullest window from this percent on. */
+const QUOTA_COMPACT_MIN = 80;
+
+type QuotaTone = "ok" | "warn" | "high";
+
+interface MeterModel {
+  label: string;
+  /** Rounded percent; null when the window reset since the latest sample. */
+  percent: number | null;
+  tone: QuotaTone;
+  /** Percent of the window's time already gone, when its reset is known. */
+  elapsed: number | null;
+  /** Reset shown after the percent: "05:25", "jeu."; empty when unknown. */
+  reset: string;
+  tooltip: string;
+  /** Spoken value. */
+  spoken: string;
+}
+
+const clock = (ts: number): string => new Date(ts).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+
+const quotaTone = (percent: number): QuotaTone =>
+  percent >= QUOTA_HIGH ? "high" : percent >= QUOTA_WARN ? "warn" : "ok";
+
+/** Share of the window's time already gone, from its estimated reset, to the half percent. */
+function elapsedOf(w: QuotaWindow, now: number): number | null {
+  if (w.resetsAt === null || w.expired) return null;
+  const share = ((now - (w.resetsAt - w.lengthMs)) / w.lengthMs) * 100;
+  return Math.round(Math.min(Math.max(share, 0), 100) * 2) / 2;
+}
+
+function meterModel(week: boolean, w: QuotaWindow, sampledAt: number, now: number): MeterModel {
+  const label = week ? "7 j" : "5 h";
+  const name = week ? "Semaine" : "Fenêtre de 5 h";
+  const shown = Math.round(w.percent);
+  const sampled = `Relevé par Claude Desktop : ${formatClock(sampledAt)}`;
+  if (w.expired) {
+    return {
+      label,
+      percent: null,
+      tone: "ok",
+      elapsed: null,
+      reset: "",
+      tooltip: `${name} : réinitialisée depuis le dernier relevé (${shown} % alors)\n${sampled}`,
+      spoken: "réinitialisée depuis le dernier relevé",
+    };
+  }
+  const lines = [`${name} : ${shown} % utilisés`];
+  let reset = "";
+  let resetPhrase = "";
+  if (w.resetsAt !== null) {
+    const lo = w.resetsAt - w.resetMarginMs;
+    const hi = w.resetsAt + w.resetMarginMs;
+    const earliest = clock(lo);
+    const latest = clock(hi);
+    if (week) {
+      const day = (ts: number, weekday: "long" | "short"): string =>
+        new Date(ts).toLocaleDateString("fr-FR", { weekday, day: "numeric", month: "short" });
+      reset = new Date(w.resetsAt).toLocaleDateString("fr-FR", { weekday: "short" });
+      resetPhrase =
+        new Date(lo).toDateString() === new Date(hi).toDateString()
+          ? `réinitialisation ${day(lo, "long")} entre ${earliest} et ${latest}`
+          : `réinitialisation entre ${day(lo, "short")} ${earliest} et ${day(hi, "short")} ${latest}`;
+    } else {
+      reset = clock(w.resetsAt);
+      resetPhrase = `réinitialisation vers ${reset} (entre ${earliest} et ${latest})`;
+    }
+    lines.push(resetPhrase.charAt(0).toUpperCase() + resetPhrase.slice(1));
+  } else if (w.percent > 0) {
+    lines.push("Heure de réinitialisation inconnue");
+  }
+  const elapsed = elapsedOf(w, now);
+  if (elapsed !== null) {
+    lines.push(`Temps écoulé : ${Math.round(elapsed)} % ${week ? "de la semaine" : "de la fenêtre"} (trait vertical)`);
+  }
+  lines.push(sampled);
+  return {
+    label,
+    percent: shown,
+    tone: quotaTone(w.percent),
+    elapsed,
+    reset,
+    tooltip: lines.join("\n"),
+    spoken: [`${shown} % utilisés`, resetPhrase].filter(Boolean).join(", "),
+  };
+}
+
+function quotaModels(now: number): MeterModel[] {
+  const quota = snapshot && isReady() ? snapshot.quota : null;
+  if (!quota) return [];
+  const out: MeterModel[] = [];
+  if (quota.fiveHour) out.push(meterModel(false, quota.fiveHour, quota.sampledAt, now));
+  if (quota.sevenDay) out.push(meterModel(true, quota.sevenDay, quota.sampledAt, now));
+  return out;
+}
+
+function buildMeter(m: MeterModel): HTMLElement {
+  const meter = dragHandle(h("div", `meter meter--${m.tone}`));
+  meter.title = m.tooltip;
+  if (m.percent === null) {
+    meter.classList.add("meter--expired");
+    meter.setAttribute("role", "img");
+    meter.setAttribute("aria-label", `Quota ${m.label} : ${m.spoken}`);
+  } else {
+    meter.setAttribute("role", "meter");
+    meter.setAttribute("aria-label", `Quota ${m.label}`);
+    meter.setAttribute("aria-valuemin", "0");
+    meter.setAttribute("aria-valuemax", "100");
+    meter.setAttribute("aria-valuenow", String(Math.min(m.percent, 100)));
+    meter.setAttribute("aria-valuetext", m.spoken);
+  }
+  const track = dragHandle(h("span", "meter-track"));
+  if (m.percent !== null) {
+    const fill = dragHandle(h("span", "meter-fill"));
+    fill.style.width = `${Math.min(m.percent, 100)}%`;
+    track.append(fill);
+  }
+  if (m.elapsed !== null) {
+    const pace = dragHandle(h("span", "meter-pace"));
+    pace.style.left = `${m.elapsed}%`;
+    track.append(pace);
+  }
+  meter.append(
+    dragHandle(h("span", "meter-label", m.label)),
+    track,
+    dragHandle(h("span", "meter-value", m.percent === null ? "—" : `${m.percent} %`)),
+  );
+  if (m.reset) meter.append(dragHandle(h("span", "meter-reset", m.reset)));
+  return meter;
+}
+
+/** Called on every render and every second: rebuilds only what changed. */
+function renderQuota(): void {
+  const now = Date.now();
+  const models = quotaModels(now);
+  const sampledAt = snapshot?.quota?.sampledAt ?? null;
+  const age = models.length && sampledAt !== null && now - sampledAt > QUOTA_STALE_MS ? formatAgo(now - sampledAt) : "";
+
+  ui.quota.hidden = models.length === 0;
+  const sig = JSON.stringify([models, age]);
+  if (ui.quota.dataset.sig !== sig) {
+    ui.quota.dataset.sig = sig;
+    ui.quota.classList.toggle("is-stale", age !== "");
+    const nodes = models.map(buildMeter);
+    if (age) {
+      const stale = dragHandle(h("span", "quota-age", `il y a ${age}`));
+      stale.title = "Claude Desktop n'a pas relevé le quota depuis : il le fait quand il est ouvert";
+      nodes.push(stale);
+    }
+    ui.quota.replaceChildren(...nodes);
+  }
+
+  // Compact: the fullest window, only when it gets close to the limit.
+  const top = models
+    .filter((m) => m.percent !== null && m.percent >= QUOTA_COMPACT_MIN)
+    .sort((a, b) => (b.percent ?? 0) - (a.percent ?? 0))[0];
+  ui.compactQuota.hidden = !top;
+  if (top) {
+    setText(ui.compactQuota, `${top.label} ${top.percent} %`);
+    ui.compactQuota.className = `compact-quota compact-quota--${top.tone}`;
+    ui.compactQuota.title = models.map((m) => m.tooltip).join("\n\n");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1516,6 +1718,8 @@ function tickTimes(): void {
     const since = Number(el.dataset.since);
     if (Number.isFinite(since)) setText(el, formatAgo(now - since));
   });
+  // The time marks move and the windows expire with the clock.
+  renderQuota();
 }
 
 // ---------------------------------------------------------------------------

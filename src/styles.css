@@ -234,6 +234,109 @@ button {
 }
 
 /* ------------------------------------------------------------------ */
+/* Plan quota: one gauge per window, under the title bar              */
+/* ------------------------------------------------------------------ */
+
+.quota {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 6px 14px 7px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 18px;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.meter {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.meter-label {
+  flex: none;
+}
+
+/* Fill: share used. Vertical mark: share of the window's time gone. A fill
+   past the mark uses the quota faster than an even pace. */
+.meter-track {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 28px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--track);
+}
+
+.meter-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.meter--warn .meter-fill {
+  background: var(--waiting);
+}
+
+.meter--high .meter-fill {
+  background: var(--error);
+}
+
+.meter-pace {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--text);
+}
+
+.meter-value {
+  flex: none;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.meter--warn .meter-value {
+  color: var(--waiting-text);
+}
+
+.meter--high .meter-value {
+  color: var(--error-text);
+}
+
+.meter--expired .meter-value {
+  font-weight: 400;
+  color: var(--text-faint);
+}
+
+.meter-reset {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+
+/* Desktop has not sampled the quota for a while: the values may be old. */
+.quota.is-stale .meter-track {
+  opacity: 0.55;
+}
+
+.quota-age {
+  flex: none;
+  color: var(--text-faint);
+}
+
+/* ------------------------------------------------------------------ */
 /* Compact bar (the whole window when compact)                        */
 /* ------------------------------------------------------------------ */
 
@@ -351,7 +454,30 @@ button {
   min-width: 8px;
 }
 
+/* The fullest quota window, shown only when it gets close to the limit. */
+.compact-quota {
+  flex-shrink: 0;
+  padding: 0 7px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.compact-quota--warn {
+  color: var(--waiting-text);
+  background: color-mix(in srgb, var(--waiting) 12%, transparent);
+}
+
+.compact-quota--high {
+  color: var(--error-text);
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+}
+
 .is-compact .titlebar,
+.is-compact .quota,
 .is-compact .scroller,
 .is-compact .health {
   display: none;
@@ -364,6 +490,7 @@ button {
 /* A window this short can only be the compact bar, whatever the settings say. */
 @media (max-height: 72px) {
   .titlebar,
+  .quota,
   .scroller,
   .health {
     display: none;
@@ -873,6 +1000,23 @@ button {
   .plan-fill {
     forced-color-adjust: none;
     background: Highlight;
+  }
+
+  .meter-track {
+    border: 1px solid CanvasText;
+  }
+
+  .meter-fill,
+  .meter-pace {
+    forced-color-adjust: none;
+  }
+
+  .meter-fill {
+    background: Highlight;
+  }
+
+  .meter-pace {
+    background: CanvasText;
   }
 }
 

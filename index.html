@@ -33,6 +33,9 @@
         </div>
       </header>
 
+      <!-- Plan usage, from Claude Desktop's history: one gauge per window. -->
+      <div id="quota" class="quota" data-tauri-drag-region hidden></div>
+
       <div id="compact-bar" class="compact-bar" data-tauri-drag-region>
         <span id="compact-dot" class="dot dot--none" aria-hidden="true" data-tauri-drag-region></span>
         <button id="compact-open" class="compact-open" type="button" hidden>
@@ -43,6 +46,7 @@
         <span id="compact-notice" class="compact-notice" data-tauri-drag-region hidden></span>
         <span id="compact-summary" class="compact-summary" data-tauri-drag-region>Connexion…</span>
         <span class="compact-spacer" data-tauri-drag-region></span>
+        <span id="compact-quota" class="compact-quota" data-tauri-drag-region hidden></span>
         <button id="compact-warn" class="icon-btn compact-warn" type="button" hidden>
           <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
             <path d="M8 2.5 14.5 13.5h-13z" />

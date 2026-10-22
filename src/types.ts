@@ -148,6 +148,29 @@ export interface Snapshot {
   sessions: SessionView[];
   counts: Counts;
   health: SourceHealth;
+  /** Plan usage, null when Claude Desktop recorded none. */
+  quota: Quota | null;
+}
+
+/** Plan usage, from the history Claude Desktop keeps. */
+export interface Quota {
+  /** When Desktop recorded the latest sample. */
+  sampledAt: number;
+  fiveHour: QuotaWindow | null;
+  sevenDay: QuotaWindow | null;
+}
+
+/** One usage window of the plan, as of the latest sample. */
+export interface QuotaWindow {
+  percent: number;
+  /** 5 hours or 7 days. */
+  lengthMs: number;
+  /** Estimated end of the current window (middle of the possible range); null when unknown. */
+  resetsAt: number | null;
+  /** Half the width of that range. */
+  resetMarginMs: number;
+  /** The window reset after the latest sample: `percent` is out of date. */
+  expired: boolean;
 }
 
 export interface Settings {
