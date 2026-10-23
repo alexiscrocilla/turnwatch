@@ -10,6 +10,7 @@ import type {
   PendingQuestion,
   PlanProgress,
   PrInfo,
+  ProposedTask,
   Quota,
   SessionState,
   SessionView,
@@ -47,6 +48,7 @@ const K = {
   lot: "local_mock-0010-lot",
   grill: "local_mock-0011-grill",
   alias: "local_mock-0012-alias",
+  offer: "local_mock-0013-offer",
 } as const;
 
 const TITLE_SETTINGS = "Refonte de la page Paramètres";
@@ -153,7 +155,35 @@ const notReadySnapshot = (): Snapshot => ({
   counts: countSessions([]),
   health: { registryOk: false, desktopOk: false, ghOk: null, errors: [] },
   quota: null,
+  proposedTasks: [],
 });
+
+/** "New task" cards: one next to its session's project, one alone in its project. */
+const mockTasks = (): ProposedTask[] => [
+  {
+    id: "task_0a1b2c3d",
+    title: "Tester le passage à l'heure d'hiver",
+    tldr: "Le minuteur partagé n'a pas de test pour le changement d'heure : un cas suffirait.",
+    createdAt: ago(25 * 60),
+    expiresAt: Date.now() + 6 * 24 * HOUR_MS,
+    listedUntil: Date.now() + 6 * 24 * HOUR_MS,
+    sessionKey: K.dates,
+    sessionTitle: "Dates relatives figées dans la liste",
+    project: "carnet",
+  },
+  {
+    id: "task_4e5f6a7b",
+    title: "Nettoyer les captures d'écran de la doc",
+    tldr: "Douze captures ne correspondent plus à l'interface actuelle.",
+    createdAt: ago(3 * 3600),
+    expiresAt: null,
+    // An older card: Desktop never expires it, the monitor lists it 7 days.
+    listedUntil: ago(3 * 3600) + 7 * 24 * HOUR_MS,
+    sessionKey: "local_mock-0099-docs",
+    sessionTitle: "Mettre à jour la documentation",
+    project: "guide-utilisateur",
+  },
+];
 
 const HOUR_MS = 3_600_000;
 
@@ -325,6 +355,20 @@ function initialSessions(): SessionView[] {
       stateSince: ago(25),
       git: git("carnet", "docs/grill", 1),
     }),
+    // The person asked for a side task: the session waits for "New session" or "Do it here".
+    session({
+      key: K.offer,
+      title: "Revoir les relances de paiement",
+      project: "facturo",
+      state: "waiting",
+      waitingFor: "offer",
+      question: ask(
+        "Nouvelle session pour « Relances : gérer les cartes refusées », ou ici ?",
+        ["Nouvelle session", "Ici"],
+        "offer",
+      ),
+      stateSince: ago(90),
+    }),
     session({
       key: K.pdf,
       title: "Corriger l'export PDF des factures",
@@ -480,6 +524,7 @@ export function createMockBackend(): MockBackend {
   let sessions: SessionView[] = scenario === "empty" ? [] : initialSessions();
   let health: SourceHealth = scenario === "health" ? brokenHealth() : okHealth();
   const quota: Quota | null = scenario === "empty" ? null : mockQuota();
+  const tasks: ProposedTask[] = scenario === "empty" ? [] : mockTasks();
   let ready = false;
   /** Increases with every published snapshot, like the engine's. */
   let seq = 0;
@@ -504,6 +549,7 @@ export function createMockBackend(): MockBackend {
           counts: countSessions(sessions),
           health,
           quota,
+          proposedTasks: tasks,
         }
       : notReadySnapshot();
 

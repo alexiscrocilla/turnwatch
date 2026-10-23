@@ -11,7 +11,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::model::{
-    DesktopPrBinding, DesktopSession, ErrorMark, PeerReceipt, SessionRef, SideNote, TurnSummary,
+    DesktopPrBinding, DesktopSession, ErrorMark, PeerReceipt, SessionRef, SideNote,
+    TaskSuggestion, TurnSummary,
 };
 
 /// Longest error message kept in an error label, in characters.
@@ -82,6 +83,7 @@ struct RawSession {
     interrupted_awaiting_person: Option<Value>,
     prior_error_mark: Option<Value>,
     query_crashes: Option<Value>,
+    background_task_suggestions: Option<Value>,
 }
 
 impl RawSession {
@@ -129,6 +131,7 @@ impl RawSession {
                 self.query_crashes.as_ref(),
                 string(self.cli_session_id.as_ref()).as_deref(),
             ),
+            suggestions: suggestions(self.background_task_suggestions.as_ref()),
         })
     }
 
@@ -284,6 +287,29 @@ fn side_notes(value: Option<&Value>) -> Vec<SideNote> {
                 session_id: string(item.get("sessionId"))?,
                 title: text(item.get("title")),
                 at: int(item.get("at"))?,
+            })
+        })
+        .collect()
+}
+
+/// Well-formed entries of `backgroundTaskSuggestions` (an id, a title and a
+/// creation time); malformed ones are skipped.
+fn suggestions(value: Option<&Value>) -> Vec<TaskSuggestion> {
+    let Some(Value::Array(items)) = value else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            Some(TaskSuggestion {
+                id: string(item.get("id"))?,
+                title: text(item.get("title"))?,
+                tldr: text(item.get("tldr")),
+                created_at: int(item.get("createdAt"))?,
+                expires_at: int(item.get("expiresAt")),
+                offer: flag(item.get("offer")),
+                accepted: flag(item.get("accepted")),
+                auto_start: string(item.get("autoStart")).is_some(),
             })
         })
         .collect()
@@ -892,6 +918,51 @@ mod tests {
         assert_eq!(s.last_crash, None);
         assert!(!s.classifier_summary_enabled);
         assert_eq!(s.model.as_deref(), Some("claude-sonnet-5"));
+    }
+
+    #[test]
+    fn parses_task_suggestions() {
+        let json = r#"{"sessionId":"local_s","backgroundTaskSuggestions":[
+            {"id":"task_0000000a","title":" Réparer le cache ","prompt":"…","tldr":"Le cache expire trop tôt.","createdAt":1000},
+            {"id":"task_0000000b","title":"Une offre","prompt":"","createdAt":2000,"expiresAt":"9000",
+             "offer":true,"accepted":true,"toolUseId":"toolu_1","asked":"…"},
+            {"id":"task_0000000c","title":"Dans le cloud","createdAt":3000,"autoStart":"cloud"},
+            {"id":"task_0000000d","createdAt":4000},
+            {"id":"task_0000000e","title":"Sans date"},
+            {"title":"Sans id","createdAt":5000},
+            "pas un objet"
+        ]}"#;
+        let s = parse_session(json).expect("parses");
+        assert_eq!(
+            s.suggestions,
+            [
+                TaskSuggestion {
+                    id: "task_0000000a".into(),
+                    title: "Réparer le cache".into(),
+                    tldr: Some("Le cache expire trop tôt.".into()),
+                    created_at: 1000,
+                    ..TaskSuggestion::default()
+                },
+                TaskSuggestion {
+                    id: "task_0000000b".into(),
+                    title: "Une offre".into(),
+                    created_at: 2000,
+                    expires_at: Some(9000),
+                    offer: true,
+                    accepted: true,
+                    ..TaskSuggestion::default()
+                },
+                TaskSuggestion {
+                    id: "task_0000000c".into(),
+                    title: "Dans le cloud".into(),
+                    created_at: 3000,
+                    auto_start: true,
+                    ..TaskSuggestion::default()
+                },
+            ]
+        );
+        let none = parse_session(r#"{"sessionId":"local_s","backgroundTaskSuggestions":{}}"#);
+        assert!(none.expect("parses").suggestions.is_empty());
     }
 
     #[test]

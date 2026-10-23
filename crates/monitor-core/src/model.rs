@@ -101,6 +101,32 @@ pub struct DesktopSession {
     pub prior_error: Option<ErrorMark>,
     /// Latest entry of `queryCrashes`.
     pub last_crash: Option<ErrorMark>,
+    /// `backgroundTaskSuggestions`: the "New task" cards the session
+    /// proposed and the person has not acted on (Desktop removes a card from
+    /// the list once it is started, dismissed or expired).
+    pub suggestions: Vec<TaskSuggestion>,
+}
+
+/// One entry of `backgroundTaskSuggestions`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskSuggestion {
+    /// "task_" and 8 hex digits.
+    pub id: String,
+    pub title: String,
+    /// `tldr`: the pitch shown on the card.
+    pub tldr: Option<String>,
+    pub created_at: i64,
+    /// Set on proposals and offers, 7 days after their creation; the older
+    /// cards (`spawn_task`) have none and never expire.
+    pub expires_at: Option<i64>,
+    /// `offer`: the person asked for this task, and the session waits until
+    /// they choose "New session" or "Do it here".
+    pub offer: bool,
+    /// `accepted`: "New session" was chosen; the session writes the brief.
+    pub accepted: bool,
+    /// `autoStart` is set: a cloud request that starts on its own.
+    pub auto_start: bool,
 }
 
 /// Desktop's verdict on the latest turn (`DS()` in Desktop's code).
@@ -347,6 +373,33 @@ pub struct Snapshot {
     pub health: SourceHealth,
     /// Plan usage, None when Claude Desktop recorded none.
     pub quota: Option<Quota>,
+    /// "New task" cards waiting for the person, newest first.
+    pub proposed_tasks: Vec<ProposedTask>,
+}
+
+/// A "New task" card a session proposed, still pending in Desktop. The
+/// person starts or dismisses it in the session that proposed it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposedTask {
+    /// "task_…".
+    pub id: String,
+    /// Plain text, one line.
+    pub title: String,
+    /// The card's pitch, plain text on one line.
+    pub tldr: Option<String>,
+    pub created_at: i64,
+    /// When Desktop drops it unstarted; None for cards that never expire.
+    pub expires_at: Option<i64>,
+    /// When the monitor stops listing it: its expiry, at the latest 7 days
+    /// after it was proposed (Desktop keeps the cards without expiry forever).
+    pub listed_until: i64,
+    /// Desktop id of the session that proposed it.
+    pub session_key: String,
+    /// That session's title.
+    pub session_title: String,
+    /// Project of that session, as on its card.
+    pub project: String,
 }
 
 /// Plan usage, from the history Claude Desktop keeps
@@ -430,8 +483,9 @@ pub struct SessionView {
     /// Raw registry reason ("input needed", "permission prompt", "sandbox
     /// request", "worker request", "dialog open"), or "decision" when the turn
     /// ended on a question (wrap_up `ask`/`blocked`, Desktop's `blocked`
-    /// summary), or "probable question" when the last message ends with a
-    /// question mark and nothing more reliable says so.
+    /// summary), "probable question" when the last message ends with a
+    /// question mark and nothing more reliable says so, or "offer" when the
+    /// session waits for "New session" or "Do it here" on a task offer.
     pub waiting_for: Option<String>,
     /// The question the session ended its turn on, when known.
     pub question: Option<PendingQuestion>,
@@ -470,7 +524,8 @@ pub struct PendingQuestion {
     pub text: String,
     /// Labels of the answer buttons, if any.
     pub options: Vec<String>,
-    /// "wrap_up" | "desktop" (Desktop's post-turn summary) | "text" (last message).
+    /// "wrap_up" | "desktop" (Desktop's post-turn summary) | "text" (last
+    /// message) | "offer" (a task offer).
     pub source: String,
     pub at: Option<i64>,
 }

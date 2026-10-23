@@ -6,8 +6,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::model::{
     ChecksState, Counts, DesktopSession, ErrorMark, GitInfo, MessageSummary, PeerLink,
-    PeerReceipt, PendingQuestion, PrInfo, RegistryEntry, SessionRef, SessionState, SessionView,
-    Settings, Snapshot, SourceHealth, ToolActivity, TranscriptInfo, Transition, TurnOrigin,
+    PeerReceipt, PendingQuestion, PrInfo, ProposedTask, RegistryEntry, SessionRef, SessionState,
+    SessionView, Settings, Snapshot, SourceHealth, ToolActivity, TranscriptInfo, Transition,
+    TurnOrigin,
 };
 use crate::transcript::plain_text;
 
@@ -61,6 +62,14 @@ const CLASSIFIER_GRACE_MS: i64 = 20_000;
 pub const WAITING_DECISION: &str = "decision";
 /// `waiting_for` of a turn whose last message ends with a question mark.
 pub const WAITING_PROBABLE_QUESTION: &str = "probable question";
+/// `waiting_for` of a session blocked on a task offer: the person asked for
+/// a task and must choose "New session" or "Do it here" in Desktop.
+pub const WAITING_OFFER: &str = "offer";
+/// A "New task" card is listed this long after it was proposed: Desktop's
+/// own proposals expire then, and an older card is no longer current work.
+pub const PROPOSAL_WINDOW_MS: i64 = 7 * 24 * MS_PER_HOUR;
+/// Longest proposed task title, in characters.
+const TASK_TITLE_MAX: usize = 120;
 /// Longest recap, in characters.
 const RECAP_MAX: usize = 400;
 /// Longest question, in characters.
@@ -102,6 +111,7 @@ pub fn build_snapshot(input: &AggregateInput) -> Snapshot {
     let mut sessions: Vec<SessionView> = live_views.chain(stopped_views).collect();
     sort_sessions(&mut sessions);
     let counts = count_sessions(&sessions);
+    let proposed_tasks = proposed_tasks(input, &sessions);
     Snapshot {
         generated_at: input.now_ms,
         ready: true,
@@ -111,7 +121,74 @@ pub fn build_snapshot(input: &AggregateInput) -> Snapshot {
         health: input.health.clone(),
         // Not a session matter: the engine adds it.
         quota: None,
+        proposed_tasks,
     }
+}
+
+/// The "New task" cards of the sessions not archived, proposed within
+/// [`PROPOSAL_WINDOW_MS`] and not expired, newest first. Offers are left out
+/// (a live session waiting on one shows it as its wait), and so are cloud
+/// requests that start on their own. A card takes the project its session
+/// shows when the session is listed, else the same project worked out from
+/// the session's folder and git root, so it stays in its group when the
+/// session leaves the list.
+fn proposed_tasks(input: &AggregateInput, sessions: &[SessionView]) -> Vec<ProposedTask> {
+    let since = input.now_ms.saturating_sub(PROPOSAL_WINDOW_MS);
+    let mut tasks = Vec::new();
+    for desktop in input.desktop.values().filter(|d| !d.is_archived) {
+        let key = desktop.host_session_id.trim();
+        if key.is_empty() {
+            continue;
+        }
+        let view = sessions.iter().find(|s| s.key == key);
+        let cwd = desktop.cwd.as_deref().unwrap_or_default();
+        let pending = desktop.suggestions.iter().filter(|s| {
+            !s.offer
+                && !s.auto_start
+                && s.created_at >= since
+                && s.expires_at.is_none_or(|at| at > input.now_ms)
+        });
+        for suggestion in pending {
+            let title = plain_text(&suggestion.title, TASK_TITLE_MAX);
+            if title.is_empty() {
+                continue;
+            }
+            let (project, session_title) = match view {
+                Some(view) => (view.project.clone(), view.title.clone()),
+                None => {
+                    let git = input.git_pr.get(key).and_then(|(git, _)| git.as_ref());
+                    let worktree = non_blank(desktop.worktree_name.as_deref());
+                    let title = non_blank(desktop.title.as_deref())
+                        .or_else(|| last_component(cwd))
+                        .unwrap_or(FALLBACK_TITLE);
+                    (project_and_worktree(cwd, git, worktree).0, title.to_owned())
+                }
+            };
+            let window_end = suggestion.created_at.saturating_add(PROPOSAL_WINDOW_MS);
+            tasks.push(ProposedTask {
+                id: suggestion.id.clone(),
+                title,
+                tldr: suggestion
+                    .tldr
+                    .as_deref()
+                    .map(|t| plain_text(t, RECAP_MAX))
+                    .filter(|t| !t.is_empty()),
+                created_at: suggestion.created_at,
+                expires_at: suggestion.expires_at,
+                listed_until: suggestion.expires_at.map_or(window_end, |at| at.min(window_end)),
+                session_key: key.to_owned(),
+                session_title,
+                project,
+            });
+        }
+    }
+    tasks.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| a.session_key.cmp(&b.session_key))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    tasks
 }
 
 /// State changes between two snapshots, sessions that appeared included.
@@ -153,6 +230,8 @@ pub struct StateInput<'a> {
     /// When the engine saw the registry leave "busy": the end of the turn,
     /// seconds before Desktop writes it.
     pub turn_ended_at: Option<i64>,
+    /// No process runs the session: Desktop stopped it.
+    pub stopped: bool,
 }
 
 /// The state of one session and what explains it.
@@ -170,6 +249,8 @@ pub struct DerivedState {
 
 /// State of one session, in this order:
 ///
+/// 0. A task offer the live session waits on ([`pending_offer`]): Waiting,
+///    "offer". The registry shows such a session busy (its tool call blocks).
 /// 1. Registry "waiting" (permission, question tool, dialog): Waiting, with
 ///    the registry's reason.
 /// 2. Registry "busy" while a turn runs: Working. The registry also stays
@@ -186,6 +267,15 @@ pub struct DerivedState {
 /// 6. Unseen when the turn ended after both the last focus in Desktop and
 ///    the acknowledgement ([`finished_edge`]); else Idle.
 pub fn derive_state(input: &StateInput) -> DerivedState {
+    if let Some(offer) = pending_offer(input) {
+        return DerivedState {
+            state: SessionState::Waiting,
+            waiting_for: Some(WAITING_OFFER.to_owned()),
+            since: offer.at,
+            question: Some(offer),
+            ..DerivedState::default()
+        };
+    }
     let status = normalized_status(input.status);
     let status_since = input.status_since;
     if status == "waiting" {
@@ -471,6 +561,30 @@ pub fn pending_question(input: &StateInput) -> Option<PendingQuestion> {
     }))
 }
 
+/// The task offer a live session waits on: the person asked for a task, and
+/// Desktop blocks the session until they choose "New session" or "Do it
+/// here" (the latest one when several are left). Not once "New session" was
+/// chosen, nor after the offer expired. A stopped session waits on nothing:
+/// its offer is a leftover that Desktop drops at its next start.
+fn pending_offer(input: &StateInput) -> Option<PendingQuestion> {
+    if input.stopped {
+        return None;
+    }
+    let offer = input
+        .desktop?
+        .suggestions
+        .iter()
+        .filter(|s| s.offer && !s.accepted && s.expires_at.is_none_or(|at| at > input.now_ms))
+        .max_by_key(|s| s.created_at)?;
+    let title = plain_text(&offer.title, TASK_TITLE_MAX);
+    Some(question(PendingQuestion {
+        text: format!("Nouvelle session pour « {title} », ou ici ?"),
+        options: vec!["Nouvelle session".to_owned(), "Ici".to_owned()],
+        source: "offer".to_owned(),
+        at: Some(offer.created_at),
+    }))
+}
+
 /// Question text and options as plain, single-line text.
 fn question(mut q: PendingQuestion) -> PendingQuestion {
     q.text = plain_text(&q.text, QUESTION_MAX);
@@ -704,6 +818,7 @@ fn build_view(
         transcript,
         acked_at: input.acks.get(key).copied(),
         turn_ended_at: input.turn_ended_at.get(key).copied(),
+        stopped,
     });
     let state = derived.state;
 
@@ -1118,7 +1233,7 @@ fn count_sessions(sessions: &[SessionView]) -> Counts {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{PlanItem, PlanProgress, SideNote, TurnInfo, TurnSummary};
+    use crate::model::{PlanItem, PlanProgress, SideNote, TaskSuggestion, TurnInfo, TurnSummary};
     use SessionState::{Error, Idle, Unseen, Waiting, Working};
 
     const NOW: i64 = 1_800_000_000_000;
@@ -2487,6 +2602,177 @@ mod tests {
         let view = f.view("local_a");
         assert_eq!((view.state, view.cli_session_id.as_str()), (Unseen, ""));
         assert_eq!(view.title, "Desktop local_a");
+    }
+
+    // --- proposed tasks ----------------------------------------------------
+
+    fn card(id: &str, created_at: i64) -> TaskSuggestion {
+        TaskSuggestion {
+            id: id.to_owned(),
+            title: format!("Tâche {id}"),
+            tldr: Some(format!("Pourquoi **{id}**")),
+            created_at,
+            ..TaskSuggestion::default()
+        }
+    }
+
+    fn offer(id: &str, created_at: i64) -> TaskSuggestion {
+        TaskSuggestion {
+            offer: true,
+            expires_at: Some(created_at + PROPOSAL_WINDOW_MS),
+            ..card(id, created_at)
+        }
+    }
+
+    #[test]
+    fn a_live_session_waits_on_its_task_offer() {
+        let file = DesktopSession {
+            suggestions: vec![offer("task_old", NOW - 20 * MIN), offer("task_new", NOW - 2 * MIN)],
+            ..desk("local_a")
+        };
+        // The registry shows the session busy: its tool call blocks.
+        let d = derive_state(&StateInput {
+            desktop: Some(&file),
+            ..input("busy")
+        });
+        assert_eq!(d.state, Waiting);
+        assert_eq!(d.waiting_for.as_deref(), Some(WAITING_OFFER));
+        assert_eq!(d.since, Some(NOW - 2 * MIN));
+        let q = d.question.expect("question");
+        assert_eq!(q.text, "Nouvelle session pour « Tâche task_new », ou ici ?");
+        assert_eq!(q.options, ["Nouvelle session", "Ici"]);
+        assert_eq!(q.source, "offer");
+
+        // "New session" chosen, expired, or no process: nothing to answer.
+        let busy = |suggestion: TaskSuggestion, stopped: bool| {
+            let file = DesktopSession {
+                suggestions: vec![suggestion],
+                ..desk("local_a")
+            };
+            derive_state(&StateInput {
+                desktop: Some(&file),
+                stopped,
+                ..input("busy")
+            })
+            .state
+        };
+        let accepted = TaskSuggestion {
+            accepted: true,
+            ..offer("task_a", NOW - MIN)
+        };
+        assert_eq!(busy(accepted, false), Working);
+        let expired = TaskSuggestion {
+            expires_at: Some(NOW - 1),
+            ..offer("task_e", NOW - PROPOSAL_WINDOW_MS - 1)
+        };
+        assert_eq!(busy(expired, false), Working);
+        assert_eq!(busy(offer("task_s", NOW - MIN), true), Working);
+        // A proposal the session made on its own is no wait.
+        assert_eq!(busy(card("task_p", NOW - MIN), false), Working);
+    }
+
+    #[test]
+    fn a_stopped_session_with_a_leftover_offer_stays_hidden() {
+        let mut f = Fixture::new();
+        f.file(DesktopSession {
+            suggestions: vec![offer("task_o", NOW - 10 * MIN)],
+            last_turn_edge_at: Some(NOW - 30 * MIN),
+            last_focused_at: Some(NOW - 20 * MIN),
+            ..desk("local_a")
+        });
+        assert!(f.keys().is_empty());
+        assert!(f.snapshot().proposed_tasks.is_empty(), "offers are not cards");
+    }
+
+    #[test]
+    fn proposed_tasks_are_recent_pending_cards() {
+        let mut f = Fixture::new();
+        f.live(entry(1, "local_live")).file(DesktopSession {
+            suggestions: vec![
+                card("task_chip", NOW - HOUR),
+                TaskSuggestion {
+                    expires_at: Some(NOW + HOUR),
+                    ..card("task_prop", NOW - 2 * HOUR)
+                },
+                offer("task_offer", NOW - MIN),
+                TaskSuggestion {
+                    auto_start: true,
+                    ..card("task_cloud", NOW - MIN)
+                },
+                TaskSuggestion {
+                    expires_at: Some(NOW),
+                    ..card("task_expired", NOW - 3 * HOUR)
+                },
+                card("task_old", NOW - PROPOSAL_WINDOW_MS - 1),
+                TaskSuggestion {
+                    title: " ** ".to_owned(),
+                    ..card("task_blank", NOW - MIN)
+                },
+            ],
+            cwd: Some(REPO_CWD.to_owned()),
+            ..desk("local_live")
+        });
+        // A session not listed (idle, no process), in a worktree.
+        f.file(DesktopSession {
+            suggestions: vec![card("task_wt", NOW - 30 * MIN)],
+            cwd: Some(WORKTREE_CWD.to_owned()),
+            title: None,
+            ..desk("local_quiet")
+        });
+        f.file(DesktopSession {
+            suggestions: vec![card("task_archived", NOW - MIN)],
+            is_archived: true,
+            ..desk("local_archived")
+        });
+
+        let s = f.snapshot();
+        assert_eq!(s.sessions.len(), 1);
+        let ids: Vec<&str> = s.proposed_tasks.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["task_wt", "task_chip", "task_prop"]);
+        let wt = &s.proposed_tasks[0];
+        assert_eq!(wt.session_key, "local_quiet");
+        assert_eq!(wt.session_title, "affectionate-lalande-433900", "the folder names it");
+        assert_eq!(wt.project, "Carnet");
+        assert_eq!(wt.tldr.as_deref(), Some("Pourquoi task_wt"));
+        assert_eq!(wt.expires_at, None);
+        // No expiry in Desktop: the monitor's window ends it.
+        assert_eq!(wt.listed_until, NOW - 30 * MIN + PROPOSAL_WINDOW_MS);
+        let chip = &s.proposed_tasks[1];
+        assert_eq!(chip.title, "Tâche task_chip");
+        // Listed: the title and project its card shows.
+        assert_eq!(
+            (chip.session_title.as_str(), chip.project.as_str()),
+            ("Desktop local_live", "atlas-web")
+        );
+        let prop = &s.proposed_tasks[2];
+        assert_eq!((prop.expires_at, prop.listed_until), (Some(NOW + HOUR), NOW + HOUR));
+    }
+
+    #[test]
+    fn a_task_keeps_its_project_when_its_session_leaves_the_list() {
+        let sub = format!(r"{REPO_CWD}\ui");
+        let git = GitInfo {
+            repo_root: Some(r"D:\Données Utilisateur\Documents\GitHub\Atlas-Web".to_owned()),
+            ..GitInfo::default()
+        };
+        let mut f = Fixture::new();
+        f.file(DesktopSession {
+            suggestions: vec![card("task_a", NOW - HOUR)],
+            cwd: Some(sub.clone()),
+            ..stopped_unseen("local_s")
+        });
+        f.git_pr.insert("local_s".to_owned(), (Some(git), None));
+        let listed = f.snapshot();
+        assert_eq!(listed.sessions[0].project, "Atlas-Web");
+        assert_eq!(listed.proposed_tasks[0].project, "Atlas-Web");
+        // Seen (clicking the task does it): the session leaves the list.
+        f.acks.insert("local_s".to_owned(), NOW);
+        let alone = f.snapshot();
+        assert!(alone.sessions.is_empty());
+        assert_eq!(alone.proposed_tasks[0].project, "Atlas-Web");
+        // Without git yet: the folder's name.
+        f.git_pr.clear();
+        assert_eq!(f.snapshot().proposed_tasks[0].project, "ui");
     }
 
     // --- one session -------------------------------------------------------

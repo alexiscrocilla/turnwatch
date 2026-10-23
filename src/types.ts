@@ -66,7 +66,7 @@ export interface PendingQuestion {
   text: string;
   /** Labels of the answer buttons, if any. */
   options: string[];
-  source: "wrap_up" | "desktop" | "text" | string;
+  source: "wrap_up" | "desktop" | "text" | "offer" | string;
   at: number | null;
 }
 
@@ -93,8 +93,9 @@ export interface SessionView {
   worktree: string | null;
   state: SessionState;
   /** Registry reason ("input needed", "permission prompt", "sandbox request",
-   * "worker request", "dialog open"), "decision" (turn ended on a question) or
-   * "probable question" (last message ends with a question mark). */
+   * "worker request", "dialog open"), "decision" (turn ended on a question),
+   * "probable question" (last message ends with a question mark) or "offer"
+   * (blocked until the person picks "New session" or "Do it here"). */
   waitingFor: string | null;
   question: PendingQuestion | null;
   stateSince: number | null;
@@ -150,6 +151,28 @@ export interface Snapshot {
   health: SourceHealth;
   /** Plan usage, null when Claude Desktop recorded none. */
   quota: Quota | null;
+  /** "New task" cards waiting for the person, newest first. */
+  proposedTasks: ProposedTask[];
+}
+
+/** A "New task" card a session proposed, still pending in Desktop: the person
+ * starts or dismisses it in that session. */
+export interface ProposedTask {
+  /** "task_…". */
+  id: string;
+  title: string;
+  /** The card's pitch, one line. */
+  tldr: string | null;
+  createdAt: number;
+  /** When Desktop drops it unstarted; null for cards that never expire. */
+  expiresAt: number | null;
+  /** When the monitor stops listing it: its expiry, at the latest 7 days after it was proposed. */
+  listedUntil: number;
+  /** Desktop id of the session that proposed it. */
+  sessionKey: string;
+  sessionTitle: string;
+  /** Project of that session, as on its card. */
+  project: string;
 }
 
 /** Plan usage, from the history Claude Desktop keeps. */

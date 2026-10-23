@@ -612,11 +612,7 @@ impl Worker {
 
         let (git_pr, gh_ok) = match &self.git_pr {
             Some(service) => {
-                let shown: HashSet<String> = lock(&self.shared)
-                    .last
-                    .iter()
-                    .flat_map(|s| s.sessions.iter().map(|v| v.key.clone()))
-                    .collect();
+                let shown = shown_keys(lock(&self.shared).last.as_ref());
                 let requests = git_pr_requests(&pass, &settings, &shown);
                 if self.last_requests.as_ref() != Some(&requests) {
                     let tracked = requests.clone();
@@ -1026,11 +1022,26 @@ fn chosen_entries<'p>(pass: &'p Pass<'_>) -> Vec<(&'p str, &'p RegistryEntry)> {
         .collect()
 }
 
+/// Keys of the sessions a snapshot shows: listed, or owning a proposed task
+/// (the task's group comes from the session's git root).
+fn shown_keys(snapshot: Option<&Snapshot>) -> HashSet<String> {
+    let Some(snapshot) = snapshot else {
+        return HashSet::new();
+    };
+    snapshot
+        .sessions
+        .iter()
+        .map(|s| s.key.clone())
+        .chain(snapshot.proposed_tasks.iter().map(|t| t.session_key.clone()))
+        .collect()
+}
+
 /// One request per listed live session key. When several processes share a
 /// key (Desktop restarted one and the old one is still alive), the process
 /// the snapshot shows wins: same rule as `aggregate::entry_rank`. Stopped
-/// sessions get one only once the previous snapshot listed them (`shown`):
-/// most of them stay hidden, and their folders are not worth reading.
+/// sessions get one only once the previous snapshot showed them (`shown`,
+/// see [`shown_keys`]): most of them stay hidden, and their folders are not
+/// worth reading.
 fn git_pr_requests(
     pass: &Pass<'_>,
     settings: &Settings,
@@ -1608,12 +1619,14 @@ fn same_content(a: &Snapshot, b: &Snapshot) -> bool {
         counts,
         health,
         quota,
+        proposed_tasks,
     } = a;
     *ready == b.ready
         && *sessions == b.sessions
         && *counts == b.counts
         && *health == b.health
         && *quota == b.quota
+        && *proposed_tasks == b.proposed_tasks
 }
 
 /// Forgets acks of sessions that are neither live nor known to Desktop.
@@ -1702,7 +1715,7 @@ fn desktop_app_in_foreground() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Counts, SessionView};
+    use crate::model::{Counts, ProposedTask, SessionView};
 
     fn engine_with_channel() -> (Engine, Receiver<Msg>) {
         let (tx, rx) = mpsc::channel();
@@ -2209,6 +2222,7 @@ mod tests {
             },
             health: SourceHealth::default(),
             quota: None,
+            proposed_tasks: Vec::new(),
         };
         let mut b = a.clone();
         b.generated_at = 2;
@@ -2218,6 +2232,10 @@ mod tests {
         let mut q = b.clone();
         q.quota = Some(Quota::default());
         assert!(!same_content(&a, &q));
+
+        let mut t = b.clone();
+        t.proposed_tasks.push(ProposedTask::default());
+        assert!(!same_content(&a, &t));
 
         let mut c = b.clone();
         c.sessions[0].state = SessionState::Unseen;
@@ -2979,6 +2997,20 @@ mod tests {
         assert_eq!(requests[1].branch_hint.as_deref(), Some("feat/t"));
         assert_eq!(requests[1].turn_edge_at, Some(7));
         assert!(requests.iter().all(|r| !r.working));
+    }
+
+    #[test]
+    fn sessions_owning_a_proposed_task_count_as_shown() {
+        assert!(shown_keys(None).is_empty());
+        let snapshot = Snapshot {
+            sessions: vec![view("local_listed", SessionState::Idle)],
+            proposed_tasks: vec![ProposedTask {
+                session_key: "local_parent".into(),
+                ..ProposedTask::default()
+            }],
+            ..Snapshot::default()
+        };
+        assert_eq!(shown_keys(Some(&snapshot)), set(&["local_listed", "local_parent"]));
     }
 
     #[test]

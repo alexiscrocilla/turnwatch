@@ -237,11 +237,13 @@ button {
 /* Plan quota: one gauge per window, under the title bar              */
 /* ------------------------------------------------------------------ */
 
+/* Gauges keep their size and sit side by side from the left: a wide window
+   adds empty space after them, a narrow one shrinks the bars. */
 .quota {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 24px;
   padding: 6px 14px 7px;
   border-bottom: 1px solid var(--border);
   font-size: 13px;
@@ -251,53 +253,57 @@ button {
 }
 
 .meter {
-  flex: 1 1 0;
+  --meter-color: var(--accent);
+  flex: 0 1 auto;
   min-width: 0;
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
+.meter--warn {
+  --meter-color: var(--waiting);
+}
+
+.meter--high {
+  --meter-color: var(--error);
+}
+
 .meter-label {
   flex: none;
 }
 
-/* Fill: share used. Vertical mark: share of the window's time gone. A fill
-   past the mark uses the quota faster than an even pace. */
+/* Bullet gauge. Tinted band, full height: share of the window's time gone.
+   Thinner bar on top, same color: share used. A bar running past the band
+   uses the quota faster than an even pace. The tint reads the same way in
+   the light and dark themes. */
 .meter-track {
   position: relative;
-  flex: 1 1 auto;
+  /* An explicit width: an empty bar has no width of its own to size its gauge by. */
+  flex: 0 1 auto;
+  width: 96px;
   min-width: 28px;
-  height: 6px;
-  border-radius: 3px;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
   background: var(--track);
 }
 
-.meter-fill {
+.meter-elapsed {
   position: absolute;
   top: 0;
   bottom: 0;
   left: 0;
-  border-radius: 3px;
-  background: var(--accent);
+  background: color-mix(in srgb, var(--meter-color) 32%, transparent);
 }
 
-.meter--warn .meter-fill {
-  background: var(--waiting);
-}
-
-.meter--high .meter-fill {
-  background: var(--error);
-}
-
-.meter-pace {
+.meter-fill {
   position: absolute;
-  top: -3px;
-  bottom: -3px;
-  width: 2px;
-  margin-left: -1px;
-  border-radius: 1px;
-  background: var(--text);
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  border-radius: 0 2px 2px 0;
+  background: var(--meter-color);
 }
 
 .meter-value {
@@ -533,7 +539,8 @@ button {
 
 .group-name {
   flex: 1 1 auto;
-  min-width: 0;
+  /* The counts give way first: the project keeps a readable start. */
+  min-width: 72px;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -541,8 +548,11 @@ button {
 }
 
 .group-count {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .group-count .tone--waiting {
@@ -551,6 +561,10 @@ button {
 
 .group-count .tone--error {
   color: var(--error-text);
+}
+
+.group-count .tone--task {
+  color: var(--text-muted);
 }
 
 .group-count-sep {
@@ -618,6 +632,34 @@ button {
 .card--idle .card-title {
   font-weight: 400;
   color: var(--text-muted);
+}
+
+/* A task a session proposed: not a session but a card to start or dismiss in
+   Desktop, drawn as an outline. */
+.card--task {
+  border-style: dashed;
+  border-color: var(--border-strong);
+  background: transparent;
+}
+
+.card--task .card-title {
+  font-weight: 400;
+}
+
+/* In the dot's place, so line 2 stays aligned with the title: 10 px wide,
+   the larger icon overflowing evenly on both sides. */
+.task-mark {
+  flex: 0 0 10px;
+  min-width: 0;
+  display: inline-flex;
+  justify-content: center;
+  color: var(--accent);
+}
+
+.task-mark .icon {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.75;
 }
 
 /* The card's own button, under the content: the keyboard and screen-reader
@@ -1007,16 +1049,19 @@ button {
   }
 
   .meter-fill,
-  .meter-pace {
+  .meter-elapsed {
     forced-color-adjust: none;
   }
 
+  /* The border takes 2 px of the track: the bar keeps 4 px. */
   .meter-fill {
+    top: 1px;
+    bottom: 1px;
     background: Highlight;
   }
 
-  .meter-pace {
-    background: CanvasText;
+  .meter-elapsed {
+    background: GrayText;
   }
 }
 

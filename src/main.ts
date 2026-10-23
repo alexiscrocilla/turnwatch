@@ -10,6 +10,7 @@ import type {
   PendingQuestion,
   PlanProgress,
   PrInfo,
+  ProposedTask,
   Quota,
   QuotaWindow,
   SessionState,
@@ -77,6 +78,7 @@ const REASONS: Record<string, string> = {
   "dialog open": "Boîte de dialogue ouverte",
   decision: "Décision attendue",
   "probable question": "Question dans le dernier message",
+  offer: "Choix demandé",
 };
 
 /** Waiting reasons guessed from the last message alone: shown less assertively. */
@@ -174,6 +176,12 @@ function formatClock(ts: number): string {
   const time = date.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
   if (date.toDateString() === new Date().toDateString()) return time;
   return `${date.toLocaleDateString("fr-FR", { day: "numeric", month: "short" })} à ${time}`;
+}
+
+/** A moment after a verb: "à 14:05" today, else "le 29 oct. à 14:05". */
+function formatWhen(ts: number): string {
+  const clock = formatClock(ts);
+  return clock.includes(" à ") ? `le ${clock}` : `à ${clock}`;
 }
 
 /** One-line message of a rejected command (Tauri rejects with strings). */
@@ -345,6 +353,33 @@ function sanitizeQuota(v: unknown): Quota | null {
   return { sampledAt, fiveHour, sevenDay };
 }
 
+function sanitizeTasks(v: unknown): ProposedTask[] {
+  if (!Array.isArray(v)) return [];
+  const seen = new Set<string>();
+  const out: ProposedTask[] = [];
+  for (const t of v) {
+    if (!isObj(t)) continue;
+    const id = str(t.id);
+    const title = oneLine(str(t.title));
+    const sessionKey = str(t.sessionKey).trim();
+    const createdAt = num(t.createdAt);
+    if (!id || !title || !sessionKey || createdAt === null || seen.has(id)) continue;
+    seen.add(id);
+    out.push({
+      id,
+      title,
+      tldr: oneLine(str(t.tldr)) || null,
+      createdAt,
+      expiresAt: num(t.expiresAt),
+      listedUntil: num(t.listedUntil) ?? num(t.expiresAt) ?? createdAt,
+      sessionKey,
+      sessionTitle: oneLine(str(t.sessionTitle)) || "une session",
+      project: str(t.project),
+    });
+  }
+  return out;
+}
+
 function sanitizeSnapshot(raw: unknown): Snapshot | null {
   if (!isObj(raw)) return null;
   const seen = new Set<string>();
@@ -366,6 +401,7 @@ function sanitizeSnapshot(raw: unknown): Snapshot | null {
     counts: countSessions(sessions, raw.counts),
     health: sanitizeHealth(raw.health),
     quota: sanitizeQuota(raw.quota),
+    proposedTasks: sanitizeTasks(raw.proposedTasks),
   };
 }
 
@@ -439,6 +475,7 @@ const ICONS = {
   clock: [circle(8, 8, 5.5), "M8 5v3.2l2 1.3"],
   warn: ["M8 2.5 14.5 13.5h-13z", "M8 6.5v3", "M8 11.5v.2"],
   eye: ["M1.5 8S3.9 3.5 8 3.5 14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z", circle(8, 8, 2)],
+  plus: ["M8 3.5v9", "M3.5 8h9"],
 } satisfies Record<string, string[]>;
 
 type IconName = keyof typeof ICONS;
@@ -698,7 +735,7 @@ function pendingText(): string {
 
 interface SummaryPart {
   text: string;
-  tone: SessionState;
+  tone: SessionState | "task";
 }
 
 function summaryParts(c: Counts): SummaryPart[] {
@@ -788,6 +825,8 @@ function renderCompact(rows: readonly HealthRow[]): void {
   let text = snapshot && isReady() ? summaryText(snapshot.counts) : pendingText();
   const prOpen = snapshot && isReady() ? snapshot.counts.prOpen : 0;
   if (prOpen > 0) text += ` · ${prOpen} PR`;
+  const tasks = snapshot && isReady() ? snapshot.proposedTasks.length : 0;
+  if (tasks > 0) text += ` · ${tasksText(tasks)}`;
   setText(ui.compactSummary, text);
   ui.compactSummary.title = text;
 }
@@ -955,7 +994,7 @@ function meterModel(week: boolean, w: QuotaWindow, sampledAt: number, now: numbe
   }
   const elapsed = elapsedOf(w, now);
   if (elapsed !== null) {
-    lines.push(`Temps écoulé : ${Math.round(elapsed)} % ${week ? "de la semaine" : "de la fenêtre"} (trait vertical)`);
+    lines.push(`Temps écoulé : ${Math.round(elapsed)} % ${week ? "de la semaine" : "de la fenêtre"} (zone teintée derrière la barre)`);
   }
   lines.push(sampled);
   return {
@@ -993,16 +1032,17 @@ function buildMeter(m: MeterModel): HTMLElement {
     meter.setAttribute("aria-valuenow", String(Math.min(m.percent, 100)));
     meter.setAttribute("aria-valuetext", m.spoken);
   }
+  // The time band first, under the thinner usage bar.
   const track = dragHandle(h("span", "meter-track"));
+  if (m.elapsed !== null) {
+    const elapsed = dragHandle(h("span", "meter-elapsed"));
+    elapsed.style.width = `${m.elapsed}%`;
+    track.append(elapsed);
+  }
   if (m.percent !== null) {
     const fill = dragHandle(h("span", "meter-fill"));
     fill.style.width = `${Math.min(m.percent, 100)}%`;
     track.append(fill);
-  }
-  if (m.elapsed !== null) {
-    const pace = dragHandle(h("span", "meter-pace"));
-    pace.style.left = `${m.elapsed}%`;
-    track.append(pace);
   }
   meter.append(
     dragHandle(h("span", "meter-label", m.label)),
@@ -1056,27 +1096,33 @@ interface Group {
   key: string;
   label: string;
   sessions: SessionView[];
-  /** Index of the group's first session in the backend order. */
+  /** "New task" cards proposed in the project, newest first, after its sessions. */
+  tasks: ProposedTask[];
+  /** Index of the group's first session in the backend order (tasks count after every session). */
   first: number;
 }
 
 /**
- * Sessions by project. Groups holding a waiting session come first (the one
- * waiting longest first), then error, unseen, working, and idle-only groups.
- * Inside a group the backend order (by urgency) is kept.
+ * Sessions and proposed tasks by project. Groups holding a waiting session come
+ * first (the one waiting longest first), then error, unseen, working, idle-only
+ * groups, and last the groups with tasks only. Inside a group the backend order
+ * (by urgency) is kept.
  */
-function groupSessions(sessions: readonly SessionView[]): Group[] {
+function groupSessions(sessions: readonly SessionView[], tasks: readonly ProposedTask[]): Group[] {
   const byKey = new Map<string, Group>();
-  sessions.forEach((s, i) => {
-    const key = s.project.trim();
+  const groupOf = (project: string, first: number): Group => {
+    const key = project.trim();
     let group = byKey.get(key);
     if (!group) {
-      group = { key, label: key || "Sans projet", sessions: [], first: i };
+      group = { key, label: key || "Sans projet", sessions: [], tasks: [], first };
       byKey.set(key, group);
     }
-    group.sessions.push(s);
-  });
-  const rank = (g: Group): number => Math.min(...g.sessions.map((s) => STATE_RANK[s.state]));
+    return group;
+  };
+  sessions.forEach((s, i) => groupOf(s.project, i).sessions.push(s));
+  tasks.forEach((t, i) => groupOf(t.project, sessions.length + i).tasks.push(t));
+  const rank = (g: Group): number =>
+    g.sessions.length ? Math.min(...g.sessions.map((s) => STATE_RANK[s.state])) : STATE_RANK.idle + 1;
   const waitingSince = (g: Group): number =>
     Math.min(...g.sessions.filter((s) => s.state === "waiting").map((s) => s.stateSince ?? Number.POSITIVE_INFINITY));
   return [...byKey.values()].sort((a, b) => {
@@ -1116,15 +1162,19 @@ function createGroup(): GroupEntry {
   return { el, name, count, list, sig: "" };
 }
 
-/** What needs the user in a group, in a few words ("1 t'attend · 1 en erreur"). */
+/** What needs the user in a group, in a few words ("1 t'attend · 1 en erreur · 2 tâches proposées"). */
 function groupNeeds(g: Group): SummaryPart[] {
   const waiting = g.sessions.filter((s) => s.state === "waiting").length;
   const error = g.sessions.filter((s) => s.state === "error").length;
+  const tasks = g.tasks.length;
   const parts: SummaryPart[] = [];
   if (waiting) parts.push({ text: `${waiting} ${plural(waiting, "t'attend", "t'attendent")}`, tone: "waiting" });
   if (error) parts.push({ text: `${error} en erreur`, tone: "error" });
+  if (tasks) parts.push({ text: tasksText(tasks), tone: "task" });
   return parts;
 }
+
+const tasksText = (n: number): string => `${n} ${plural(n, "tâche proposée", "tâches proposées")}`;
 
 function fillGroup(entry: GroupEntry, g: Group): void {
   const needs = groupNeeds(g);
@@ -1153,6 +1203,7 @@ function place(parent: Element, el: Element, prev: Element | null): void {
 
 function renderList(): void {
   const sessions = snapshot?.sessions ?? [];
+  const tasks = snapshot && isReady() ? snapshot.proposedTasks : [];
   // Removing or moving a node blurs it: remember the focus by session key.
   const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const activeCard = active && ui.cards.contains(active) ? active.closest<HTMLElement>(".card") : null;
@@ -1163,7 +1214,7 @@ function renderList(): void {
   const keepGroups = new Set<string>();
   let prevGroup: HTMLElement | null = null;
 
-  for (const g of groupSessions(sessions)) {
+  for (const g of groupSessions(sessions, tasks)) {
     keepGroups.add(g.key);
     let group = groupEntries.get(g.key);
     if (!group) {
@@ -1190,6 +1241,18 @@ function renderList(): void {
       place(group.list, entry.el, prev);
       prev = entry.el;
     }
+    for (const t of g.tasks) {
+      const key = taskKey(t);
+      keepCards.add(key);
+      let entry = cardEntries.get(key);
+      if (!entry) {
+        entry = createTaskCard(t);
+        cardEntries.set(key, entry);
+      }
+      fillTaskCard(entry, t);
+      place(group.list, entry.el, prev);
+      prev = entry.el;
+    }
   }
 
   for (const [key, entry] of cardEntries) {
@@ -1205,8 +1268,8 @@ function renderList(): void {
 
   if (focusKey && !ui.cards.contains(document.activeElement)) restoreFocus(focusKey, focusPr, focusIndex);
 
-  ui.empty.hidden = sessions.length > 0;
-  if (!sessions.length) {
+  ui.empty.hidden = sessions.length > 0 || tasks.length > 0;
+  if (!ui.empty.hidden) {
     const ready = isReady();
     setText(ui.emptyTitle, ready ? "Aucune session active" : pendingText());
     setText(ui.emptyHint, ready ? "Les sessions de l'onglet Code de Claude Desktop apparaîtront ici." : "");
@@ -1253,22 +1316,39 @@ function createCard(s: SessionView): CardEntry {
   return { el, hit, desc, sig: "", parts: new Map() };
 }
 
-/** Updates a card in place: only the rows whose displayed content changed are rebuilt. */
 function fillCard(entry: CardEntry, s: SessionView): void {
-  const sections = cardSections(s);
   const actionable = entry.hit !== null;
-  const name = actionable ? cardName(s) : "";
-  const description = actionable ? cardDescription(s) : "";
-  const tooltip = cardTooltip(s);
-  const sig = JSON.stringify([s.state, name, description, tooltip, sections.map((p) => [p.id, p.sig])]);
+  fillEntry(entry, {
+    className: `card card--${s.state} ${actionable ? "card--action" : "card--static"}`,
+    name: actionable ? cardName(s) : "",
+    description: actionable ? cardDescription(s) : "",
+    tooltip: cardTooltip(s),
+    sections: cardSections(s),
+  });
+}
+
+/** What a card shows and says: its look, its button's name and description, its tooltip and rows. */
+interface CardContent {
+  className: string;
+  name: string;
+  description: string;
+  tooltip: string;
+  sections: Section[];
+}
+
+/** Updates a card in place: only the rows whose displayed content changed are rebuilt. */
+function fillEntry(entry: CardEntry, c: CardContent): void {
+  const { sections } = c;
+  const actionable = entry.hit !== null;
+  const sig = JSON.stringify([c.className, c.name, c.description, c.tooltip, sections.map((p) => [p.id, p.sig])]);
   if (sig === entry.sig) return;
   entry.sig = sig;
 
-  entry.el.className = `card card--${s.state} ${actionable ? "card--action" : "card--static"}`;
-  setAttr(entry.el, "title", tooltip || null);
+  entry.el.className = c.className;
+  setAttr(entry.el, "title", c.tooltip || null);
   if (entry.hit && entry.desc) {
-    setAttr(entry.hit, "aria-label", name);
-    setText(entry.desc, description);
+    setAttr(entry.hit, "aria-label", c.name);
+    setText(entry.desc, c.description);
   }
 
   const next = new Map<string, CardPart>();
@@ -1292,6 +1372,69 @@ function fillCard(entry: CardEntry, s: SessionView): void {
     if (!next.has(id)) old.el.remove();
   }
   entry.parts = next;
+}
+
+// ---------------------------------------------------------------------------
+// Proposed task: a "New task" card of a session, started or dismissed in Desktop
+// ---------------------------------------------------------------------------
+
+/** Card key of a task: never a session key ("local_…", "cli:…"). */
+const taskKey = (t: ProposedTask): string => `task:${t.id}`;
+
+const TASK_HINT = "Clic : ouvrir la session dans Claude Desktop, pour lancer ou écarter la tâche";
+
+/** A click opens the session that proposed the task, where its card is. */
+function createTaskCard(t: ProposedTask): CardEntry {
+  const el = h("div", "card");
+  el.setAttribute("role", "listitem");
+  el.dataset.key = taskKey(t);
+  const hit = h("button", "card-hit");
+  hit.type = "button";
+  const desc = h("span");
+  desc.id = `card-desc-${++descSeq}`;
+  desc.hidden = true;
+  hit.setAttribute("aria-describedby", desc.id);
+  el.append(hit, desc);
+  const sessionKey = t.sessionKey;
+  el.addEventListener("click", () => openSession(sessionKey));
+  return { el, hit, desc, sig: "", parts: new Map() };
+}
+
+function fillTaskCard(entry: CardEntry, t: ProposedTask): void {
+  const lines = [`Tâche proposée : ${t.title}`];
+  if (t.tldr) lines.push(clip(t.tldr, 300));
+  lines.push(`Proposée par ${t.sessionTitle}, ${formatClock(t.createdAt)}`);
+  if (t.expiresAt !== null && t.expiresAt <= t.listedUntil) {
+    lines.push(`Desktop l'écarte ${formatWhen(t.expiresAt)} si elle n'est pas lancée`);
+  } else {
+    // Desktop keeps it; the monitor only lists current work.
+    lines.push(`Masquée ici ${formatWhen(t.listedUntil)} ; Desktop la garde jusqu'à ce que tu la lances ou l'écartes`);
+  }
+  lines.push(TASK_HINT);
+  fillEntry(entry, {
+    className: "card card--task card--action",
+    name: `Tâche proposée : ${t.title}, par ${t.sessionTitle}. Ouvrir la session dans Claude Desktop`,
+    description: t.tldr ?? "",
+    tooltip: lines.join("\n"),
+    sections: [
+      section("head", { title: t.title, createdAt: t.createdAt }, buildTaskHead),
+      section("line", { by: t.sessionTitle }, (m) => h("div", "card-line", `Proposée par ${m.by}`)),
+    ],
+  });
+}
+
+function buildTaskHead(m: { title: string; createdAt: number }): HTMLElement {
+  const head = h("div", "card-head");
+  const mark = h("span", "task-mark");
+  mark.append(icon("plus"));
+  const status = h("span", "card-status");
+  status.append(
+    h("span", "status-label", "proposée"),
+    " · ",
+    sinceSpan(m.createdAt, "status-since", `Proposée ${formatClock(m.createdAt)}`),
+  );
+  head.append(mark, h("span", "card-title", m.title), status);
+  return head;
 }
 
 /** Hides a row from screen readers, except the buttons in it (the PR chip). */
