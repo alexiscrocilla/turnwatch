@@ -138,6 +138,7 @@ const DEFAULT_SETTINGS: Settings = {
   notifyOnWaiting: true,
   notifyOnFinished: false,
   notifyOnError: true,
+  notifyOnQuota: true,
   includeCliSessions: false,
   prPollSecs: 60,
   messageWindowHours: 6,
@@ -377,6 +378,7 @@ function sanitizeWindow(v: unknown): QuotaWindow | null {
     lengthMs,
     resetsAt: num(v.resetsAt),
     resetMarginMs: Math.max(num(v.resetMarginMs) ?? 0, 0),
+    endsBy: num(v.endsBy) ?? 0,
     expired: v.expired === true,
   };
 }

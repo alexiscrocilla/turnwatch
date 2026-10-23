@@ -208,7 +208,9 @@ export interface QuotaWindow {
   resetsAt: number | null;
   /** Half the width of that range. */
   resetMarginMs: number;
-  /** The window reset after the latest sample: `percent` is out of date. */
+  /** The latest the window holding the latest sample can end. */
+  endsBy: number;
+  /** `endsBy` is past: `percent` is out of date. */
   expired: boolean;
 }
 
@@ -216,6 +218,8 @@ export interface Settings {
   notifyOnWaiting: boolean;
   notifyOnFinished: boolean;
   notifyOnError: boolean;
+  /** Toast when the plan's usage crosses 80 % / 95 % (5 hours) or 90 % (7 days). */
+  notifyOnQuota: boolean;
   includeCliSessions: boolean;
   prPollSecs: number;
   messageWindowHours: number;

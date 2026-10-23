@@ -2,7 +2,10 @@
 //! window, the tray icon and Windows toasts.
 
 mod app_identity;
+mod autostart;
 mod desktop_link;
+mod quota_alerts;
+mod registry;
 mod settings_store;
 mod toasts;
 mod tray;
@@ -159,7 +162,14 @@ fn setup(app: &AppHandle) -> tauri::Result<()> {
         .map(settings_store::load)
         .unwrap_or_default();
 
-    tray::create(app, &settings, on_menu_event, toggle_main_window)?;
+    autostart::repair(app);
+    tray::create(
+        app,
+        &settings,
+        autostart::AVAILABLE.then(|| autostart::is_enabled(app)),
+        on_menu_event,
+        toggle_main_window,
+    )?;
 
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
         let _ = window.set_always_on_top(settings.always_on_top);
@@ -376,10 +386,10 @@ fn show_native_toast(app: &AppHandle, toast: &toasts::Toast) -> bool {
     }
 }
 
-/// A toast was clicked: a toast about several sessions shows our window, one
-/// about a session opens it.
+/// A toast was clicked: a toast about the monitor (several sessions, the
+/// quota…) shows our window, one about a session opens it.
 fn on_toast_click(app: &AppHandle, key: &str) {
-    if key == toasts::SUMMARY_KEY {
+    if toasts::shows_monitor(key) {
         show_main_window(app);
     } else {
         open_or_show(app, key);
@@ -696,6 +706,14 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
     match id.as_str() {
         tray::MENU_TOGGLE => toggle_main_window(app),
         tray::MENU_QUIT => quit(app),
+        tray::MENU_AUTOSTART => {
+            let wanted = tray::autostart_checked(app);
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let wanted = wanted.unwrap_or_else(|| !autostart::is_enabled(&app));
+                set_autostart(&app, wanted);
+            });
+        }
         _ => {
             let Some(toggle) = menu_toggle(&id) else {
                 return;
@@ -708,6 +726,23 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
     }
 }
 
+/// Turns the start with Windows on or off, then shows what the registry
+/// says (the menu has already flipped its check mark on its own).
+fn set_autostart(app: &AppHandle, wanted: bool) {
+    if let Err(error) = autostart::set(app, wanted) {
+        let verb = if wanted { "activer" } else { "désactiver" };
+        show_toast(
+            app,
+            &toasts::Toast {
+                key: format!("{}autostart", toasts::MONITOR_PREFIX),
+                title: "Démarrage avec Windows".to_owned(),
+                body: format!("Impossible de {verb} le lancement au démarrage : {error}"),
+            },
+        );
+    }
+    tray::sync_autostart(app, autostart::is_enabled(app));
+}
+
 /// The settings change of a tray check item.
 fn menu_toggle(id: &str) -> Option<fn(&mut Settings)> {
     let toggle: fn(&mut Settings) = match id {
@@ -716,6 +751,7 @@ fn menu_toggle(id: &str) -> Option<fn(&mut Settings)> {
         tray::MENU_NOTIFY_WAITING => |s| s.notify_on_waiting = !s.notify_on_waiting,
         tray::MENU_NOTIFY_FINISHED => |s| s.notify_on_finished = !s.notify_on_finished,
         tray::MENU_NOTIFY_ERROR => |s| s.notify_on_error = !s.notify_on_error,
+        tray::MENU_NOTIFY_QUOTA => |s| s.notify_on_quota = !s.notify_on_quota,
         tray::MENU_INCLUDE_CLI => |s| s.include_cli_sessions = !s.include_cli_sessions,
         _ => return None,
     };
@@ -936,6 +972,7 @@ mod tests {
             (tray::MENU_NOTIFY_WAITING, |s| s.notify_on_waiting),
             (tray::MENU_NOTIFY_FINISHED, |s| s.notify_on_finished),
             (tray::MENU_NOTIFY_ERROR, |s| s.notify_on_error),
+            (tray::MENU_NOTIFY_QUOTA, |s| s.notify_on_quota),
             (tray::MENU_INCLUDE_CLI, |s| s.include_cli_sessions),
         ] {
             let mut settings = start.clone();
@@ -943,6 +980,8 @@ mod tests {
             assert_eq!(read(&settings), !read(&start), "{id}");
         }
         assert!(menu_toggle(tray::MENU_QUIT).is_none());
+        // Kept in the registry, not in the settings.
+        assert!(menu_toggle(tray::MENU_AUTOSTART).is_none());
     }
 
     #[test]

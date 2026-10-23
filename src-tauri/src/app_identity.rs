@@ -20,6 +20,8 @@ use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Manager};
 
+use crate::registry;
+
 /// File name of the toast icon, in the app's local data folder.
 pub const ICON_FILE: &str = "toast-icon.png";
 /// The app icon shown on toasts.
@@ -86,112 +88,9 @@ pub fn register(app: &AppHandle) -> Option<String> {
         .app_local_data_dir()
         .ok()
         .and_then(|dir| write_icon(&dir).ok());
-    win::write_values(&key_path(&id), &values(&name, icon.as_deref()))
+    registry::write_values(&key_path(&id), &values(&name, icon.as_deref()))
         .ok()
         .map(|()| id)
-}
-
-#[cfg(windows)]
-mod win {
-    use std::ptr::{null, null_mut};
-
-    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
-    use windows_sys::Win32::System::Registry::{
-        HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
-        RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW, RegGetValueW, RegSetValueExW,
-    };
-
-    fn wide(text: &str) -> Vec<u16> {
-        text.encode_utf16().chain(Some(0)).collect()
-    }
-
-    /// Creates `HKEY_CURRENT_USER\<subkey>` if needed and sets each string
-    /// value that differs. Returns the first Win32 error.
-    pub fn write_values(subkey: &str, values: &[(&str, String)]) -> Result<(), u32> {
-        let subkey = wide(subkey);
-        let mut key: HKEY = null_mut();
-        // SAFETY: every pointer is a live null-terminated buffer or an out
-        // parameter for the duration of the call; the key is closed below.
-        let status = unsafe {
-            RegCreateKeyExW(
-                HKEY_CURRENT_USER,
-                subkey.as_ptr(),
-                0,
-                null(),
-                REG_OPTION_NON_VOLATILE,
-                KEY_QUERY_VALUE | KEY_SET_VALUE,
-                null(),
-                &mut key,
-                null_mut(),
-            )
-        };
-        if status != ERROR_SUCCESS {
-            return Err(status);
-        }
-        let mut result = Ok(());
-        for (name, value) in values {
-            if read_string(key, name).as_deref() == Some(value.as_str()) {
-                continue;
-            }
-            let name = wide(name);
-            let data = wide(value);
-            let Ok(bytes) = u32::try_from(data.len() * 2) else {
-                continue;
-            };
-            // SAFETY: `data` holds `bytes` bytes, null terminator included.
-            let status = unsafe {
-                RegSetValueExW(key, name.as_ptr(), 0, REG_SZ, data.as_ptr().cast(), bytes)
-            };
-            if status != ERROR_SUCCESS && result.is_ok() {
-                result = Err(status);
-            }
-        }
-        // SAFETY: `key` was opened above and is closed once.
-        unsafe { RegCloseKey(key) };
-        result
-    }
-
-    /// A string value of an open key, if present.
-    fn read_string(key: HKEY, name: &str) -> Option<String> {
-        let name = wide(name);
-        let mut size = 0u32;
-        // SAFETY: size query; no data buffer is passed.
-        let status = unsafe {
-            RegGetValueW(key, null(), name.as_ptr(), RRF_RT_REG_SZ, null_mut(), null_mut(), &mut size)
-        };
-        if status != ERROR_SUCCESS {
-            return None;
-        }
-        let mut buffer = vec![0u16; (size as usize).div_ceil(2).max(1)];
-        let mut size = u32::try_from(buffer.len() * 2).ok()?;
-        // SAFETY: `buffer` holds `size` bytes.
-        let status = unsafe {
-            RegGetValueW(
-                key,
-                null(),
-                name.as_ptr(),
-                RRF_RT_REG_SZ,
-                null_mut(),
-                buffer.as_mut_ptr().cast(),
-                &mut size,
-            )
-        };
-        if status != ERROR_SUCCESS {
-            return None;
-        }
-        buffer.truncate((size as usize / 2).min(buffer.len()));
-        while buffer.last() == Some(&0) {
-            buffer.pop();
-        }
-        String::from_utf16(&buffer).ok()
-    }
-}
-
-#[cfg(not(windows))]
-mod win {
-    pub fn write_values(_subkey: &str, _values: &[(&str, String)]) -> Result<(), u32> {
-        Err(0)
-    }
 }
 
 #[cfg(test)]

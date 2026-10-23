@@ -20,7 +20,10 @@ pub const MENU_ALWAYS_ON_TOP: &str = "always_on_top";
 pub const MENU_NOTIFY_WAITING: &str = "notify_on_waiting";
 pub const MENU_NOTIFY_FINISHED: &str = "notify_on_finished";
 pub const MENU_NOTIFY_ERROR: &str = "notify_on_error";
+pub const MENU_NOTIFY_QUOTA: &str = "notify_on_quota";
 pub const MENU_INCLUDE_CLI: &str = "include_cli_sessions";
+/// Not a setting: the registry says whether the app starts with Windows.
+pub const MENU_AUTOSTART: &str = "autostart";
 pub const MENU_QUIT: &str = "quit";
 
 const AMBER: [u8; 3] = [0xF5, 0x9E, 0x0B];
@@ -36,15 +39,20 @@ pub struct TrayHandles {
     notify_waiting: CheckMenuItem<Wry>,
     notify_finished: CheckMenuItem<Wry>,
     notify_error: CheckMenuItem<Wry>,
+    notify_quota: CheckMenuItem<Wry>,
     include_cli: CheckMenuItem<Wry>,
+    autostart: CheckMenuItem<Wry>,
     /// Color and tooltip currently shown, to skip redundant updates.
     shown: Mutex<Option<([u8; 3], String)>>,
 }
 
 /// Builds the tray icon and its menu, and registers [`TrayHandles`].
+/// `autostart`: whether the app starts with Windows now; None when that
+/// cannot be offered (the item is greyed out).
 pub fn create(
     app: &AppHandle,
     settings: &Settings,
+    autostart: Option<bool>,
     on_menu: impl Fn(&AppHandle, MenuEvent) + Send + Sync + 'static,
     on_left_click: impl Fn(&AppHandle) + Send + Sync + 'static,
 ) -> tauri::Result<TrayIcon> {
@@ -74,11 +82,25 @@ pub fn create(
         "Notifier les erreurs",
         settings.notify_on_error,
     )?;
+    let notify_quota = check(
+        app,
+        MENU_NOTIFY_QUOTA,
+        "Notifier le quota (5 h : 80 %, 95 % ; semaine : 90 %)",
+        settings.notify_on_quota,
+    )?;
     let include_cli = check(
         app,
         MENU_INCLUDE_CLI,
         "Inclure les sessions hors Desktop",
         settings.include_cli_sessions,
+    )?;
+    let autostart = CheckMenuItem::with_id(
+        app,
+        MENU_AUTOSTART,
+        "Lancer au démarrage de Windows",
+        autostart.is_some(),
+        autostart.unwrap_or(false),
+        None::<&str>,
     )?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quitter", true, None::<&str>)?;
@@ -91,7 +113,9 @@ pub fn create(
             &notify_waiting,
             &notify_finished,
             &notify_error,
+            &notify_quota,
             &include_cli,
+            &autostart,
             &separator,
             &quit,
         ],
@@ -124,10 +148,25 @@ pub fn create(
         notify_waiting,
         notify_finished,
         notify_error,
+        notify_quota,
         include_cli,
+        autostart,
         shown: Mutex::new(Some((color, tooltip_text))),
     });
     Ok(tray)
+}
+
+/// Sets the "start with Windows" check mark to what the registry says.
+pub fn sync_autostart(app: &AppHandle, enabled: bool) {
+    if let Some(handles) = app.try_state::<TrayHandles>() {
+        let _ = handles.autostart.set_checked(enabled);
+    }
+}
+
+/// The "start with Windows" check mark. A click flips it before the menu
+/// event arrives, so in the event it is what the user asked for.
+pub fn autostart_checked(app: &AppHandle) -> Option<bool> {
+    app.try_state::<TrayHandles>()?.autostart.is_checked().ok()
 }
 
 fn check(app: &AppHandle, id: &str, text: &str, checked: bool) -> tauri::Result<CheckMenuItem<Wry>> {
@@ -145,6 +184,7 @@ pub fn sync_checks(app: &AppHandle, settings: &Settings) {
     let _ = handles.notify_waiting.set_checked(settings.notify_on_waiting);
     let _ = handles.notify_finished.set_checked(settings.notify_on_finished);
     let _ = handles.notify_error.set_checked(settings.notify_on_error);
+    let _ = handles.notify_quota.set_checked(settings.notify_on_quota);
     let _ = handles.include_cli.set_checked(settings.include_cli_sessions);
 }
 

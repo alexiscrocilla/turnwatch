@@ -455,7 +455,11 @@ pub struct QuotaWindow {
     pub resets_at: Option<i64>,
     /// Half the width of that range.
     pub reset_margin_ms: i64,
-    /// The window reset after the latest sample: `percent` is out of date.
+    /// The latest the window holding the latest sample can end, from the
+    /// reset range when known, else from when the window can have started.
+    /// A later sample belongs to another window.
+    pub ends_by: i64,
+    /// `ends_by` is past: `percent` is out of date.
     pub expired: bool,
 }
 
@@ -605,6 +609,9 @@ pub struct Settings {
     pub notify_on_waiting: bool,
     pub notify_on_finished: bool,
     pub notify_on_error: bool,
+    /// Toast when the plan's usage crosses a threshold (5 hours: 80 % and
+    /// 95 %; 7 days: 90 %).
+    pub notify_on_quota: bool,
     /// Also list sessions started outside Claude Desktop.
     pub include_cli_sessions: bool,
     pub pr_poll_secs: u64,
@@ -620,6 +627,7 @@ impl Default for Settings {
             notify_on_waiting: true,
             notify_on_finished: false,
             notify_on_error: true,
+            notify_on_quota: true,
             include_cli_sessions: false,
             pr_poll_secs: 60,
             message_window_hours: 6,

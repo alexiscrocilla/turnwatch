@@ -38,6 +38,8 @@ use monitor_core::model::{SessionState, SessionView, Settings, Snapshot, Transit
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_notification::NotificationExt;
 
+use crate::quota_alerts::QuotaAlerts;
+
 /// A wait seen when its session is first listed (it just appeared or came
 /// back) is announced only when it started this recently.
 const FRESH_WAIT_MS: i64 = 15_000;
@@ -54,24 +56,33 @@ const BODY_MAX_CHARS: usize = 300;
 pub const REMINDER_DELAY_MS: i64 = 5 * 60 * 1000;
 /// `waiting_for` of a wait only guessed from a trailing question mark.
 const PROBABLE_QUESTION: &str = "probable question";
-/// Key of a toast coalescing several sessions: a click shows the monitor.
+/// Keys of the toasts about the monitor itself (several sessions, the quota,
+/// a setting) start with this: a click shows the monitor. Each kind has its
+/// own key, because Windows replaces a toast that has the same key.
+pub const MONITOR_PREFIX: &str = "monitor:";
+/// Key of a toast coalescing several sessions.
 pub const SUMMARY_KEY: &str = "monitor:summary";
 
 /// One toast to show.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Toast {
     /// Session key, used to open the session when the toast is clicked;
-    /// [`SUMMARY_KEY`] for a toast about several sessions.
+    /// a key starting with [`MONITOR_PREFIX`] for a toast about the monitor.
     pub key: String,
     pub title: String,
     pub body: String,
 }
 
 impl Toast {
-    /// A toast about several sessions: its click shows the monitor.
+    /// A toast about the monitor, not one session: its click shows the monitor.
     pub fn is_summary(&self) -> bool {
-        self.key == SUMMARY_KEY
+        shows_monitor(&self.key)
     }
+}
+
+/// A click on the toast with this key shows the monitor.
+pub fn shows_monitor(key: &str) -> bool {
+    key.starts_with(MONITOR_PREFIX)
 }
 
 /// What a toast announces.
@@ -93,6 +104,8 @@ pub struct Notifier {
     left_working: HashMap<String, i64>,
     /// Waits and errors held back until they have lasted long enough.
     deferred: HashMap<String, Deferred>,
+    /// Plan usage thresholds already announced.
+    quota: QuotaAlerts,
 }
 
 /// An episode held back until it is due.
@@ -129,13 +142,13 @@ impl Notifier {
                 self.left_working.insert(transition.key.clone(), now_ms);
             }
         }
+        // Quiet on the first sight of the quota, like the sessions below.
+        let mut toasts = self.quota.check(snapshot.quota.as_ref(), settings, now_ms);
         if !self.seen_first_snapshot {
             self.seen_first_snapshot = true;
             self.record_listed(snapshot, now_ms);
-            return Vec::new();
+            return toasts;
         }
-
-        let mut toasts = Vec::new();
         for transition in transitions {
             let Some(kind) = self.kind(transition, settings, now_ms) else {
                 continue;
@@ -551,6 +564,32 @@ mod tests {
             "the first snapshot never toasts"
         );
         notifier
+    }
+
+    #[test]
+    fn quota_thresholds_toast_with_the_snapshots() {
+        use monitor_core::model::{Quota, QuotaWindow};
+        let with_quota = |percent: f64| Snapshot {
+            ready: true,
+            quota: Some(Quota {
+                sampled_at: NOW,
+                five_hour: Some(QuotaWindow {
+                    percent,
+                    ends_by: NOW + 3_600_000,
+                    ..QuotaWindow::default()
+                }),
+                seven_day: None,
+            }),
+            ..Snapshot::default()
+        };
+        let mut notifier = Notifier::default();
+        // The first snapshot: already above, so quiet.
+        assert!(notifier.select(&[], &with_quota(85.0), &Settings::default(), NOW).is_empty());
+        assert!(notifier.select(&[], &with_quota(90.0), &Settings::default(), NOW).is_empty());
+        let toasts = notifier.select(&[], &with_quota(95.0), &Settings::default(), NOW);
+        assert_eq!(toasts.len(), 1);
+        assert_eq!(toasts[0].title, "Quota 5 h à 95 %");
+        assert!(toasts[0].is_summary());
     }
 
     fn all_on() -> Settings {

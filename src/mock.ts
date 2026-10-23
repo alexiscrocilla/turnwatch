@@ -96,6 +96,7 @@ const MOCK_SETTINGS: Settings = {
   notifyOnWaiting: true,
   notifyOnFinished: false,
   notifyOnError: true,
+  notifyOnQuota: true,
   includeCliSessions: true,
   prPollSecs: 60,
   messageWindowHours: 6,
@@ -196,6 +197,7 @@ const mockQuota = (): Quota => ({
     lengthMs: 5 * HOUR_MS,
     resetsAt: Date.now() + 72 * 60_000,
     resetMarginMs: 7 * 60_000,
+    endsBy: Date.now() + 79 * 60_000,
     expired: false,
   },
   sevenDay: {
@@ -203,6 +205,7 @@ const mockQuota = (): Quota => ({
     lengthMs: 7 * 24 * HOUR_MS,
     resetsAt: Date.now() + 6 * 24 * HOUR_MS,
     resetMarginMs: 150 * 60_000,
+    endsBy: Date.now() + 6 * 24 * HOUR_MS + 150 * 60_000,
     expired: false,
   },
 });

@@ -11,6 +11,8 @@ Le reste est dans l'infobulle de la carte : branche, fichiers non commités, ré
 
 Claude Desktop notifie déjà les fins de tour. Le moniteur n'envoie donc que des **rappels** : une session qui t'attend depuis plus de 5 minutes sans réponse. Il ne le fait pas quand la session est visible dans un volet de Desktop au premier plan, ni pour une simple « question probable ». Plusieurs rappels dus en même temps forment une seule notification (« 3 sessions t'attendent toujours »).
 
+Il prévient aussi quand le quota du forfait passe un seuil : la fenêtre de 5 heures à 80 % puis à 95 %, la semaine à 90 %, avec le délai avant la réinitialisation (« Quota 5 h à 82 % · Réinitialisation dans 1 h 20 »). Chaque seuil n'est annoncé qu'une fois par fenêtre, et un seuil déjà dépassé au lancement du moniteur ne l'est pas.
+
 ## Prérequis
 
 - Windows 10 ou 11, avec le runtime WebView2 (déjà présent sur Windows 11).
@@ -46,7 +48,7 @@ pnpm tauri dev
 - **Tâches proposées** : les cartes « New task » qu'une session a proposées et que tu n'as encore ni lancées ni écartées apparaissent dans le groupe de leur projet, après ses sessions, en pointillés (« proposée · 2 h », « Proposée par … »). Un clic ouvre la session qui l'a proposée : c'est là, dans Desktop, qu'on lance ou écarte la carte, aucun lien ne permet de le faire de l'extérieur. Une carte n'est montrée que pendant 7 jours après sa proposition : c'est la durée de vie que Desktop donne à ses propositions, et le moniteur l'applique aussi aux anciennes cartes, que Desktop garde sans limite (l'infobulle dit laquelle des deux règles s'applique).
 - **Clic sur une carte** : ouvre cette session dans Claude Desktop (lien `claude://code/continue?session=local_…`, le même que celui de la liste de raccourcis de Desktop) et la marque comme vue.
 - **Clic sur la pastille de PR** : ouvre la PR dans le navigateur. Quand l'Auto-fix de Desktop surveille la PR (flèche circulaire), Desktop relance lui-même la session si la CI échoue, en cas de conflit ou de commentaire de revue. Tant que la session travaille sur une CI rouge ou un conflit, l'infobulle dit « Auto-fix s'en charge ». Desktop ne la relance qu'une fois par échec : si elle t'attend, s'arrête sur une erreur ou finit sans avoir réglé le problème, c'est à toi de voir. L'état vient de la carte de PR que Desktop garde pour la session, avec la même règle que lui (PR ouverte, sur GitHub, ni écartée ni héritée d'une session copiée), et n'est montré que si Desktop tourne.
-- **Icône de la zone de notification** : sa couleur suit la session la plus urgente, et son infobulle donne le résumé, puis le quota sur une seconde ligne. Un clic affiche ou masque la fenêtre. Le menu permet de changer les réglages et de quitter. Masquer la fenêtre ne ferme pas l'application.
+- **Icône de la zone de notification** : sa couleur suit la session la plus urgente, et son infobulle donne le résumé, puis le quota sur une seconde ligne. Un clic affiche ou masque la fenêtre. Le menu permet de changer les réglages, de lancer le moniteur au démarrage de Windows et de quitter. Masquer la fenêtre ne ferme pas l'application.
 
 ### États
 
@@ -99,6 +101,7 @@ Ils sont modifiables depuis le menu de l'icône et enregistrés dans `%APPDATA%\
 | `notifyOnWaiting` | `true` | Rappel quand une session t'attend depuis 5 minutes |
 | `notifyOnFinished` | `false` | Notification immédiate quand une session termine son tour (Desktop le fait déjà) |
 | `notifyOnError` | `true` | Rappel quand une erreur reste sans réponse 5 minutes |
+| `notifyOnQuota` | `true` | Notification quand le quota passe 80 % puis 95 % (5 heures) ou 90 % (semaine) |
 | `includeCliSessions` | `false` | Affiche aussi les sessions lancées hors de Claude Desktop |
 | `prPollSecs` | `60` | Intervalle de rafraîchissement des PR |
 | `messageWindowHours` | `6` | Au-delà, un message sans réponse n'est plus signalé |
@@ -109,6 +112,7 @@ Ils sont modifiables depuis le menu de l'icône et enregistrés dans `%APPDATA%\
 
 - `%APPDATA%\local.claude-session-monitor\` : `settings.json`, `acks.json` (sessions déjà vues) et la position de la fenêtre.
 - `HKCU\Software\Classes\AppUserModelId\local.claude-session-monitor` et `%LOCALAPPDATA%\local.claude-session-monitor\toast-icon.png` : le nom et l'icône des notifications, pour un exécutable sans installateur. Supprimer les deux suffit à annuler.
+- Seulement si « Lancer au démarrage de Windows » est coché : la valeur `local.claude-session-monitor` de `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, qui contient le chemin de l'exécutable. C'est elle que liste « Applications au démarrage » dans les paramètres de Windows. Désactiver l'application là (ou dans le Gestionnaire des tâches) décoche aussi la case du menu ; la recocher efface ce réglage de Windows (la valeur du même nom sous `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run`). Décocher la case supprime les deux ; si l'exécutable a été déplacé, la valeur est remise sur son nouveau chemin au lancement suivant. La version de développement (`pnpm tauri dev`) ne propose pas cette case : elle dépend du serveur de développement.
 
 Elle ne modifie rien dans `~\.claude` ni dans les dossiers de Claude Desktop.
 

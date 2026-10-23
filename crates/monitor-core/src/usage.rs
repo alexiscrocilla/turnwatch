@@ -95,7 +95,10 @@ pub fn quota(history: &History, now_ms: i64) -> Option<Quota> {
 }
 
 /// The 5-hour window: it starts with the first use after the previous one
-/// ended, so its reset is 5 hours after that start.
+/// ended, so its reset is 5 hours after that start. Without a reset placed
+/// closely enough, the window still began at the latest at the first point
+/// of its run, so it ends by 5 hours after it (unless the run outlasts one
+/// window: two windows met without a visible reset).
 fn rolling_window(points: &[Point], now_ms: i64) -> Option<QuotaWindow> {
     let last = *points.last()?;
     let range = if last.percent > 0.0 {
@@ -105,7 +108,27 @@ fn rolling_window(points: &[Point], now_ms: i64) -> Option<QuotaWindow> {
     } else {
         None
     };
-    Some(window(last, FIVE_HOURS, range, now_ms))
+    let run_start = points[run_first(points)].t;
+    let ends_by = match range {
+        Some((_, hi)) => hi,
+        None if last.percent > 0.0 && last.t - run_start <= FIVE_HOURS => run_start + FIVE_HOURS,
+        None => last.t + FIVE_HOURS,
+    };
+    Some(window(last, FIVE_HOURS, range, ends_by, now_ms))
+}
+
+/// Index of the first point of the latest run of non-zero percents that
+/// never decrease (the latest point's own index when it is 0 %).
+fn run_first(points: &[Point]) -> usize {
+    let mut first = points.len().saturating_sub(1);
+    while first > 0 {
+        let (before, at) = (points[first - 1], points[first]);
+        if before.percent <= 0.0 || before.percent > at.percent {
+            break;
+        }
+        first -= 1;
+    }
+    first
 }
 
 /// Range (start excluded, end included) in which the window holding the
@@ -115,14 +138,7 @@ fn rolling_window(points: &[Point], now_ms: i64) -> Option<QuotaWindow> {
 /// when that run starts the history: the start may be older.
 fn rolling_start(points: &[Point], length: i64) -> Option<(i64, i64)> {
     let last = points.last()?;
-    let mut first = points.len() - 1;
-    while first > 0 {
-        let (before, at) = (points[first - 1], points[first]);
-        if before.percent <= 0.0 || before.percent > at.percent {
-            break;
-        }
-        first -= 1;
-    }
+    let first = run_first(points);
     if first == 0 {
         return None;
     }
@@ -144,7 +160,8 @@ fn weekly_window(points: &[Point], now_ms: i64) -> Option<QuotaWindow> {
             let weeks = (last.t - mid).div_euclid(WEEK) + 1;
             (lo + weeks * WEEK, hi + weeks * WEEK)
         });
-    Some(window(last, WEEK, range, now_ms))
+    let ends_by = range.map_or(last.t + WEEK, |(_, hi)| hi);
+    Some(window(last, WEEK, range, ends_by, now_ms))
 }
 
 /// Range of one scheduled weekly reset, from the drops of the history (a
@@ -179,23 +196,26 @@ fn weekly_reset(points: &[Point]) -> Option<(i64, i64)> {
     best.map(|(_, range)| range)
 }
 
-/// A window from its latest point and the range its reset falls in.
-fn window(last: Point, length: i64, reset: Option<(i64, i64)>, now_ms: i64) -> QuotaWindow {
+/// A window from its latest point, the range its reset falls in, and the
+/// latest it can end.
+fn window(
+    last: Point,
+    length: i64,
+    reset: Option<(i64, i64)>,
+    ends_by: i64,
+    now_ms: i64,
+) -> QuotaWindow {
     let (resets_at, reset_margin_ms) = match reset {
         Some((lo, hi)) => (Some(lo + (hi - lo) / 2), (hi - lo) / 2),
         None => (None, 0),
-    };
-    // Without a reset time: no window outlasts its length.
-    let expired = match reset {
-        Some((_, hi)) => now_ms > hi,
-        None => now_ms - last.t > length,
     };
     QuotaWindow {
         percent: last.percent,
         length_ms: length,
         resets_at,
         reset_margin_ms,
-        expired,
+        ends_by,
+        expired: now_ms > ends_by,
     }
 }
 
@@ -298,6 +318,33 @@ mod tests {
     }
 
     #[test]
+    fn an_unplaced_window_ends_five_hours_after_its_first_point() {
+        // 0 % then hourly samples: the start is only known within an hour,
+        // too wide for a reset time, but the window began by 09:00.
+        let points = vec![
+            p(T0, 0.0),
+            p(T0 + HOUR, 20.0),
+            p(T0 + 2 * HOUR, 45.0),
+            p(T0 + 3 * HOUR, 70.0),
+            p(T0 + 4 * HOUR, 84.0),
+        ];
+        let w = rolling_window(&points, T0 + 4 * HOUR).expect("window");
+        assert_eq!(w.resets_at, None);
+        assert_eq!(w.ends_by, T0 + HOUR + FIVE_HOURS);
+        assert!(!w.expired);
+        // Over at 14:00, not 5 hours after the 84 % sample.
+        assert!(rolling_window(&points, T0 + HOUR + FIVE_HOURS + 1).expect("window").expired);
+        // A placed reset ends the window at the latest end of its range.
+        let mut placed = every_15_min(T0, &[60.0, 70.0, 82.0]);
+        placed.extend(every_15_min(T0 + 45 * MIN, &[1.0, 3.0]));
+        let w = rolling_window(&placed, T0 + HOUR).expect("window");
+        assert_eq!(w.ends_by, T0 + 45 * MIN + FIVE_HOURS);
+        // The weekly window without a schedule: a week after its latest point.
+        let w = weekly_window(&[p(T0, 5.0)], T0).expect("window");
+        assert_eq!(w.ends_by, T0 + WEEK);
+    }
+
+    #[test]
     fn a_run_longer_than_the_window_is_not_one_window() {
         // No drop for 6 hours: two windows met without a visible reset.
         let percents: Vec<f64> = (0..25).map(|i| f64::from(i) + 1.0).collect();
@@ -305,6 +352,8 @@ mod tests {
         points.extend(every_15_min(T0, &percents));
         let w = rolling_window(&points, T0 + 6 * HOUR).expect("window");
         assert_eq!(w.resets_at, None);
+        // The latest window began after the run did: 5 hours after the latest point.
+        assert_eq!(w.ends_by, T0 + 6 * HOUR + FIVE_HOURS);
     }
 
     /// A weekly series dropping to `after` between `lo` and `hi`.
