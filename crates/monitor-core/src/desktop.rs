@@ -132,6 +132,7 @@ impl RawSession {
                 string(self.cli_session_id.as_ref()).as_deref(),
             ),
             suggestions: suggestions(self.background_task_suggestions.as_ref()),
+            auto_fix_prs: self.prs.as_ref().map(auto_fix_prs).unwrap_or_default(),
         })
     }
 
@@ -252,6 +253,45 @@ fn pr_from_cards(prs: &Value) -> Option<DesktopPrBinding> {
         .rposition(|card| card.state.as_deref() == Some("OPEN"))
         .or_else(|| cards.len().checked_sub(1))?;
     Some(cards.swap_remove(index))
+}
+
+/// The cards of `prs` Desktop's Auto-fix watches, with Desktop's own rule:
+/// `autoFix` on, not inherited from a forked session, not dismissed, not
+/// merged, landed, closed or abandoned (any case), and on GitHub (no
+/// provider, "github" or "github-enterprise"). The `autoFix` flag itself
+/// stays set after a merge, so the other conditions matter.
+fn auto_fix_prs(prs: &Value) -> Vec<DesktopPrBinding> {
+    let Some(cards) = prs.as_array() else {
+        return Vec::new();
+    };
+    cards
+        .iter()
+        .filter(|card| {
+            let ended = string(card.get("state")).is_some_and(|state| {
+                matches!(
+                    state.trim().to_ascii_lowercase().as_str(),
+                    "merged" | "landed" | "closed" | "abandoned"
+                )
+            });
+            let github = string(card.get("provider"))
+                .is_none_or(|p| matches!(p.trim(), "github" | "github-enterprise"));
+            flag(card.get("autoFix"))
+                && !flag(card.get("inherited"))
+                && !flag(card.get("dismissed"))
+                && !ended
+                && github
+        })
+        .filter_map(|card| {
+            let number = count(card.get("prNumber")).or_else(|| count(card.get("number")));
+            let url = string(card.get("url"));
+            (number.is_some() || url.is_some()).then(|| DesktopPrBinding {
+                number,
+                url,
+                repository: string(card.get("repo")).or_else(|| string(card.get("repository"))),
+                state: string(card.get("state")),
+            })
+        })
+        .collect()
 }
 
 /// Well-formed entries of `peerReceipts`; malformed ones are skipped.
@@ -918,6 +958,27 @@ mod tests {
         assert_eq!(s.last_crash, None);
         assert!(!s.classifier_summary_enabled);
         assert_eq!(s.model.as_deref(), Some("claude-sonnet-5"));
+    }
+
+    #[test]
+    fn auto_fix_prs_follow_desktops_rule() {
+        let json = r#"{"sessionId":"local_s","prs":[
+            {"prNumber":1,"repo":"o/r","state":"OPEN","autoFix":true},
+            {"prNumber":2,"repo":"o/r","state":"MERGED","autoFix":true},
+            {"prNumber":3,"repo":"o/r","state":"open","autoFix":true,"dismissed":true},
+            {"prNumber":4,"repo":"o/r","state":"OPEN","autoFix":true,"inherited":true},
+            {"prNumber":5,"repo":"o/r","state":"OPEN","autoFix":true,"provider":"gitlab"},
+            {"prNumber":6,"repo":"o/r","state":"OPEN","autoFix":false},
+            {"prNumber":7,"repository":"o/s","state":"draft","autoFix":true,"provider":"github-enterprise"},
+            {"prNumber":8,"repo":"o/r","state":" Closed ","autoFix":true},
+            {"repo":"o/r","state":"OPEN","autoFix":true}
+        ]}"#;
+        let s = parse_session(json).expect("parses");
+        let numbers: Vec<Option<u32>> = s.auto_fix_prs.iter().map(|p| p.number).collect();
+        assert_eq!(numbers, [Some(1), Some(7)]);
+        assert_eq!(s.auto_fix_prs[1].repository.as_deref(), Some("o/s"));
+        let none = parse_session(r#"{"sessionId":"local_s","prs":{}}"#).expect("parses");
+        assert!(none.auto_fix_prs.is_empty());
     }
 
     #[test]

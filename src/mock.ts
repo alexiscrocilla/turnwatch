@@ -49,6 +49,7 @@ const K = {
   grill: "local_mock-0011-grill",
   alias: "local_mock-0012-alias",
   offer: "local_mock-0013-offer",
+  planned: "local_mock-0014-planned",
 } as const;
 
 const TITLE_SETTINGS = "Refonte de la page Paramètres";
@@ -259,6 +260,7 @@ function pr(repository: string, number: number, title: string, patch: Partial<Pr
     mergeState: null,
     checkedAt: Date.now(),
     source: "desktop",
+    autoFix: false,
     ...patch,
   };
 }
@@ -297,6 +299,7 @@ function session(seed: Seed): SessionView {
     contextExceededCount: null,
     lastError: null,
     version: "2.1.308",
+    findings: null,
     ...seed,
   };
 }
@@ -379,10 +382,12 @@ function initialSessions(): SessionView[] {
       contextExceededCount: 2,
       activity: act("Bash", "cargo test -p export", 6 * 60),
       git: git("facturo", "fix/pdf-export", 2),
+      // Desktop's Auto-fix watches the PR, but this session failed: nothing handles the red CI now.
       pr: pr("exemple/facturo", 16, "Export PDF : polices embarquées", {
         checks: "fail",
         reviewDecision: "CHANGES_REQUESTED",
         mergeState: "BLOCKED",
+        autoFix: true,
       }),
     }),
     session({
@@ -401,6 +406,18 @@ function initialSessions(): SessionView[] {
         "`list.test.ts` ; **rien n'est commité**.",
       plan: plan(DATES_PLAN, 4, true),
       git: git("carnet", "fix/relative-dates", 3),
+      // The turn ended on a code review.
+      findings: { count: 13, confirmed: 5, open: 13, at: ago(4 * 60) },
+    }),
+    // Plan mode: the plan waits for approval.
+    session({
+      key: K.planned,
+      title: "Miniatures servies par le CDN",
+      project: "atlas-web",
+      state: "waiting",
+      waitingFor: "plan approval",
+      stateSince: ago(40),
+      activity: act("ExitPlanMode", "Servir les miniatures depuis le CDN", 40),
     }),
     session({
       key: K.settings,

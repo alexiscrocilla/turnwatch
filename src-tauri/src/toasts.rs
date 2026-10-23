@@ -391,6 +391,7 @@ pub fn waiting_reason(raw: Option<&str>) -> String {
         Some("decision") => "Une décision est attendue".to_owned(),
         Some("probable question") => "Question dans le dernier message".to_owned(),
         Some("offer") => "Un choix de session est attendu".to_owned(),
+        Some("plan approval") => "Un plan attend ton approbation".to_owned(),
         Some(other) if !other.is_empty() => other.to_owned(),
         _ => "Action requise".to_owned(),
     }
@@ -1036,6 +1037,7 @@ mod tests {
             "Question dans le dernier message"
         );
         assert_eq!(waiting_reason(Some("offer")), "Un choix de session est attendu");
+        assert_eq!(waiting_reason(Some("plan approval")), "Un plan attend ton approbation");
         assert_eq!(waiting_reason(Some("new reason")), "new reason");
         assert_eq!(waiting_reason(None), "Action requise");
     }

@@ -1474,6 +1474,7 @@ fn pr_from_json(value: &Value, source: &str, checked_at: i64) -> Option<PrInfo> 
         merge_state: str_field(value, "mergeStateStatus").filter(|state| state != "UNKNOWN"),
         checked_at,
         source: source.to_string(),
+        auto_fix: false,
     })
 }
 
@@ -1713,6 +1714,7 @@ fn pr_from_binding(binding: &DesktopPrBinding, checked_at: i64) -> Option<PrInfo
         merge_state: None,
         checked_at,
         source: SOURCE_DESKTOP.to_string(),
+        auto_fix: false,
     })
 }
 

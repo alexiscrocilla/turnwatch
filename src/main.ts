@@ -6,6 +6,7 @@ import { listen as tauriListen } from "@tauri-apps/api/event";
 import { CMD, EVENT_SETTINGS, EVENT_SNAPSHOT, EVENT_VISIBILITY } from "./types";
 import type {
   Counts,
+  FindingsReport,
   PeerLink,
   PendingQuestion,
   PlanProgress,
@@ -79,6 +80,7 @@ const REASONS: Record<string, string> = {
   decision: "Décision attendue",
   "probable question": "Question dans le dernier message",
   offer: "Choix demandé",
+  "plan approval": "Plan à approuver",
 };
 
 /** Waiting reasons guessed from the last message alone: shown less assertively. */
@@ -150,6 +152,30 @@ function reasonFr(raw: string | null): string {
   const key = reasonKey(raw);
   if (!key) return "En attente";
   return REASONS[key] ?? (raw ?? "").trim();
+}
+
+/** The plan's title when the session waits for its approval (the pending call is the plan). */
+function planTitle(s: SessionView): string | null {
+  if (reasonKey(s.waitingFor) !== "plan approval") return null;
+  return str(s.activity?.summary).trim() || null;
+}
+
+/** Why a session waits, in a few words: the reason, with the plan's title for a plan. */
+function reasonText(s: SessionView): string {
+  const plan = planTitle(s);
+  const reason = reasonFr(s.waitingFor);
+  return plan ? `${reason} : ${plan}` : reason;
+}
+
+/** "Revue : 13 résultats dont 5 confirmés", or what is left to handle. */
+function findingsText(f: FindingsReport): string {
+  const results = (n: number): string => `${n} ${plural(n, "résultat", "résultats")}`;
+  if (f.open < f.count) return `Revue : ${results(f.open)} sur ${f.count} encore à traiter`;
+  if (f.confirmed >= f.count) {
+    return f.count > 1 ? `Revue : ${results(f.count)}, tous confirmés` : "Revue : 1 résultat confirmé";
+  }
+  const confirmed = f.confirmed > 0 ? ` dont ${f.confirmed} ${plural(f.confirmed, "confirmé", "confirmés")}` : "";
+  return `Revue : ${results(f.count)}${confirmed}`;
 }
 
 /** True when the question is only guessed from the wording of the last message. */
@@ -259,11 +285,21 @@ function sanitizeActivity(v: unknown): ToolActivity | null {
   return { name, summary: oneLine(isProseTool(name) ? plainText(summary) : summary), at: num(v.at) };
 }
 
+/** A review worth showing: some findings, some still open. */
+function sanitizeFindings(v: unknown): FindingsReport | null {
+  if (!isObj(v)) return null;
+  const count = Math.max(num(v.count) ?? 0, 0);
+  const open = Math.min(Math.max(num(v.open) ?? 0, 0), count);
+  if (count === 0 || open === 0) return null;
+  const confirmed = Math.min(Math.max(num(v.confirmed) ?? 0, 0), count);
+  return { count, confirmed, open, at: num(v.at) };
+}
+
 function sanitizeSession(raw: unknown): SessionView | null {
   if (!isObj(raw) || typeof raw.key !== "string" || raw.key === "") return null;
   const s = raw as unknown as SessionView;
   const messages = isObj(raw.messages) ? raw.messages : {};
-  const pr = isObj(raw.pr) && num(raw.pr.number) !== null ? s.pr : null;
+  const pr = isObj(raw.pr) && num(raw.pr.number) !== null && s.pr ? { ...s.pr, autoFix: raw.pr.autoFix === true } : null;
   return {
     ...s,
     title: str(s.title).trim() || str(s.project).trim() || "Session sans titre",
@@ -289,6 +325,7 @@ function sanitizeSession(raw: unknown): SessionView | null {
       undelivered: peerLinks(messages.undelivered),
       unreadInbound: peerLinks(messages.unreadInbound),
     },
+    findings: sanitizeFindings(raw.findings),
   };
 }
 
@@ -476,6 +513,8 @@ const ICONS = {
   warn: ["M8 2.5 14.5 13.5h-13z", "M8 6.5v3", "M8 11.5v.2"],
   eye: ["M1.5 8S3.9 3.5 8 3.5 14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z", circle(8, 8, 2)],
   plus: ["M8 3.5v9", "M3.5 8h9"],
+  // Circling arrow: something keeps an eye on it and acts by itself.
+  autoFix: ["M12.5 8a4.5 4.5 0 1 1-1.3-3.2", "M12.5 2.5v2.8H9.7"],
 } satisfies Record<string, string[]>;
 
 type IconName = keyof typeof ICONS;
@@ -783,7 +822,7 @@ function mostUrgent(sessions: readonly SessionView[]): SessionState | null {
 }
 
 /** What a waiting session needs, in a few words: its question if known. */
-const waitingText = (s: SessionView): string => s.question?.text ?? reasonFr(s.waitingFor);
+const waitingText = (s: SessionView): string => s.question?.text ?? reasonText(s);
 
 function renderCompact(rows: readonly HealthRow[]): void {
   const sessions = snapshot?.sessions ?? [];
@@ -833,7 +872,7 @@ function renderCompact(rows: readonly HealthRow[]): void {
 
 /** The compact line for the most urgent waiting session: "<title> · <question or reason>". */
 function renderCompactOpen(first: SessionView, more: number): void {
-  const reason = reasonFr(first.waitingFor);
+  const reason = reasonText(first);
   const question = first.question?.text ?? null;
   const options = first.question?.options ?? [];
   setText(ui.compactOpenTitle, first.title);
@@ -1489,7 +1528,7 @@ function cardName(s: SessionView): string {
   const parts = [s.title, STATE_LABEL[s.state]];
   switch (s.state) {
     case "waiting":
-      parts.push(reasonFr(s.waitingFor));
+      parts.push(reasonText(s));
       if (s.question) parts.push(s.question.text);
       else if (s.activity && REASONS_WITH_TOOL.has(reasonKey(s.waitingFor))) parts.push(activityText(s.activity));
       break;
@@ -1513,6 +1552,7 @@ function cardDescription(s: SessionView): string {
   if (s.state === "waiting" && s.question?.options.length) {
     out.push(`Réponses proposées : ${s.question.options.join(", ")}`);
   }
+  if (s.findings) out.push(findingsText(s.findings));
   if (s.onScreen) out.push("Affichée dans Claude Desktop");
   const where = [s.project ? `projet ${s.project}` : "", branchOf(s) ? `branche ${branchOf(s)}` : ""].filter(Boolean);
   if (where.length) out.push(where.join(", "));
@@ -1521,7 +1561,7 @@ function cardDescription(s: SessionView): string {
   const plan = planModel(s);
   if (plan) out.push(`Plan : ${plan.done} sur ${plan.total}${plan.current ? `, en cours : ${plan.current}` : ""}`);
   const pr = prModel(s);
-  if (pr) out.push(`PR #${pr.number}, ${prStatus(pr)}`);
+  if (pr) out.push(`PR #${pr.number}, ${prStatus(pr, s.state)}`);
   out.push(...extrasLines(extrasModel(s)));
   const parent = parentTitle(s);
   if (parent) out.push(`Lancée depuis ${parent}`);
@@ -1534,15 +1574,21 @@ function cardTooltip(s: SessionView): string {
   if (!s.isDesktop) lines.push(CLI_TOOLTIP);
   if (s.state === "waiting") {
     const reason = reasonFr(s.waitingFor);
+    const plan = planTitle(s);
     if (s.question) {
       lines.push(`${reason} : ${clip(s.question.text, 300)}`);
       if (s.question.options.length) lines.push(`Réponses proposées : ${s.question.options.join(" · ")}`);
+    }
+    if (plan) {
+      const at = s.activity?.at ?? null;
+      lines.push(`${reason} : ${clip(plan, 300)}${at !== null ? ` (${formatClock(at)})` : ""}`);
     }
     if (s.activity && REASONS_WITH_TOOL.has(reasonKey(s.waitingFor))) {
       lines.push(`Demande : ${clip(activityText(s.activity), 160)}`);
     }
   }
   if (s.state === "error" && s.lastError) lines.push(`Erreur : ${clip(s.lastError, 300)}`);
+  if (s.findings) lines.push(findingsText(s.findings));
   const branch = str(s.git?.branch).trim();
   const worktree = str(s.worktree).trim();
   if (branch) lines.push(`Branche : ${branch}`);
@@ -1550,12 +1596,14 @@ function cardTooltip(s: SessionView): string {
   const dirty = dirtyOf(s);
   if (dirty > 0) lines.push(`${dirty} ${plural(dirty, "fichier modifié non commité", "fichiers modifiés non commités")}`);
   const pr = prModel(s);
-  if (pr && !isOpen(pr)) lines.push(`PR #${pr.number} ${prStatus(pr)}`);
+  if (pr && !isOpen(pr)) lines.push(`PR #${pr.number} ${prStatus(pr, s.state)}`);
   if (s.recap) lines.push(`Résumé : ${clip(oneLine(s.recap), 200)}`);
-  if (s.activity) {
+  // For a plan to approve, the activity is the plan call itself, already shown above.
+  const planShown = planTitle(s) !== null;
+  if (s.activity && !planShown) {
     const at = s.activity.at !== null ? ` (${formatClock(s.activity.at)})` : "";
     lines.push(`Dernière activité : ${clip(activityText(s.activity), 120)}${at}`);
-  } else if (s.lastActivityAt !== null && num(s.lastActivityAt) !== null) {
+  } else if (!s.activity && s.lastActivityAt !== null && num(s.lastActivityAt) !== null) {
     lines.push(`Dernière activité : ${formatClock(s.lastActivityAt)}`);
   }
   const parent = parentTitle(s);
@@ -1612,7 +1660,7 @@ function buildHead(m: HeadModel): HTMLElement {
     tag.title = CLI_TOOLTIP;
     head.append(tag);
   }
-  if (m.pr) head.append(prChip(m.pr));
+  if (m.pr) head.append(prChip(m.pr, m.state));
   const label = STATE_SHORT[m.state];
   if (label || m.since !== null) {
     const status = h("span", `card-status status--${m.state}`);
@@ -1626,11 +1674,11 @@ function buildHead(m: HeadModel): HTMLElement {
   return head;
 }
 
-// Line 2: the question or reason, the error, or the plan.
+// Line 2: the question or reason, the error, the plan, or a finished review's findings.
 
 type LineModel =
   | { kind: "question" | "reason"; text: string; tentative: boolean }
-  | { kind: "error"; text: string }
+  | { kind: "error" | "findings"; text: string }
   | ({ kind: "plan" } & PlanModel);
 
 function lineModel(s: SessionView): LineModel | null {
@@ -1638,7 +1686,7 @@ function lineModel(s: SessionView): LineModel | null {
     case "waiting":
       return s.question
         ? { kind: "question", text: s.question.text, tentative: isTentative(s) }
-        : { kind: "reason", text: reasonFr(s.waitingFor), tentative: isTentative(s) };
+        : { kind: "reason", text: reasonText(s), tentative: isTentative(s) };
     case "error":
       return { kind: "error", text: oneLine(s.lastError ?? ERROR_FALLBACK) };
     case "working": {
@@ -1646,6 +1694,8 @@ function lineModel(s: SessionView): LineModel | null {
       return plan ? { kind: "plan", ...plan } : null;
     }
     case "unseen":
+      // A review just finished: how much it found is the news.
+      return s.findings ? { kind: "findings", text: findingsText(s.findings) } : null;
     case "idle":
       return null;
   }
@@ -1659,6 +1709,8 @@ function buildLine(m: LineModel): HTMLElement {
       return h("div", `card-line line--reason${m.tentative ? " is-tentative" : ""}`, m.text);
     case "error":
       return h("div", "card-line line--error", m.text);
+    case "findings":
+      return h("div", "card-line line--findings", m.text);
     case "plan":
       return buildPlan(m);
   }
@@ -1721,10 +1773,27 @@ function prModel(s: SessionView): PrModel | null {
     reviewDecision: s.pr.reviewDecision,
     checks: s.pr.checks,
     mergeState: s.pr.mergeState,
+    autoFix: s.pr.autoFix === true,
   };
 }
 
 const isOpen = (pr: PrModel): boolean => str(pr.state).toUpperCase() === "OPEN";
+
+const AUTO_FIX_TOOLTIP =
+  "Auto-fix : Claude Desktop relance la session quand la CI échoue, en cas de conflit ou de commentaire de revue";
+
+/**
+ * Auto-fix watches this open PR: "handling" while the session works on its failing CI or
+ * conflict, else "on". Desktop wakes the session once per failure: once that turn ends,
+ * waits on the person or fails, nothing is being handled any more.
+ */
+function autoFixState(pr: PrModel, state: SessionState): "on" | "handling" | null {
+  if (!pr.autoFix || !isOpen(pr)) return null;
+  const trouble = pr.checks === "fail" || str(pr.mergeState).toUpperCase() === "DIRTY";
+  return trouble && state === "working" ? "handling" : "on";
+}
+
+const AUTO_FIX_PHRASE = { on: "Auto-fix actif", handling: "Auto-fix s'en charge" } as const;
 
 type PrVariant = "pass" | "fail" | "pending" | "none";
 
@@ -1739,15 +1808,17 @@ function prVariant(pr: PrModel): PrVariant {
   return pr.checks === "pass" || pr.checks === "fail" || pr.checks === "pending" ? pr.checks : "none";
 }
 
-function prStatus(pr: PrModel): string {
+function prStatus(pr: PrModel, session: SessionState): string {
   const state = str(pr.state).toUpperCase();
   if (state === "MERGED") return "fusionnée";
   if (state === "CLOSED") return "fermée";
   const checks = CHECKS_PHRASE[pr.checks] ?? "checks inconnus";
-  return pr.isDraft ? `brouillon, ${checks}` : `ouverte, ${checks}`;
+  const autoFix = autoFixState(pr, session);
+  const status = pr.isDraft ? `brouillon, ${checks}` : `ouverte, ${checks}`;
+  return autoFix ? `${status}, ${AUTO_FIX_PHRASE[autoFix]}` : status;
 }
 
-function prTooltip(pr: PrModel): string {
+function prTooltip(pr: PrModel, session: SessionState): string {
   const title = str(pr.title).trim();
   const lines = [`PR #${pr.number}${title ? ` · ${title}` : ""}`];
   lines.push(pr.isDraft ? "Ouverte · brouillon" : "Ouverte");
@@ -1758,17 +1829,26 @@ function prTooltip(pr: PrModel): string {
   if (merge) lines.push(`Fusion : ${MERGE_LABEL[merge] ?? merge.toLowerCase()}`);
   const repo = str(pr.repository).trim();
   if (repo) lines.push(repo);
+  const autoFix = autoFixState(pr, session);
+  if (autoFix) lines.push(AUTO_FIX_TOOLTIP);
+  if (autoFix === "handling") lines.push("La session y travaille : Auto-fix s'en charge");
   return lines.join("\n");
 }
 
-function prChip(pr: PrModel): HTMLElement {
+function prChip(pr: PrModel, session: SessionState): HTMLElement {
   const variant = prVariant(pr);
-  const btn = h("button", `chip chip--pr chip--${variant}${pr.isDraft ? " chip--draft" : ""}`);
+  const autoFix = autoFixState(pr, session) !== null;
+  const btn = h("button", `chip chip--pr chip--${variant}${pr.isDraft ? " chip--draft" : ""}${autoFix ? " chip--autofix" : ""}`);
   btn.type = "button";
   btn.dataset.focus = "pr";
-  btn.title = prTooltip(pr);
-  btn.setAttribute("aria-label", `Ouvrir la PR #${pr.number} (${prStatus(pr)})`);
+  btn.title = prTooltip(pr, session);
+  btn.setAttribute("aria-label", `Ouvrir la PR #${pr.number} (${prStatus(pr, session)})`);
   btn.append(icon(PR_ICON[variant]), h("span", "", `#${pr.number}`));
+  if (autoFix) {
+    const mark = icon("autoFix");
+    mark.classList.add("chip-autofix");
+    btn.append(mark);
+  }
   const url = pr.url;
   btn.addEventListener("click", (e) => {
     e.stopPropagation();

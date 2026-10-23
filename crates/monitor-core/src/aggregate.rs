@@ -65,6 +65,8 @@ pub const WAITING_PROBABLE_QUESTION: &str = "probable question";
 /// `waiting_for` of a session blocked on a task offer: the person asked for
 /// a task and must choose "New session" or "Do it here" in Desktop.
 pub const WAITING_OFFER: &str = "offer";
+/// `waiting_for` of a session waiting for the person to approve its plan.
+pub const WAITING_PLAN_APPROVAL: &str = "plan approval";
 /// A "New task" card is listed this long after it was proposed: Desktop's
 /// own proposals expire then, and an older card is no longer current work.
 pub const PROPOSAL_WINDOW_MS: i64 = 7 * 24 * MS_PER_HOUR;
@@ -252,7 +254,7 @@ pub struct DerivedState {
 /// 0. A task offer the live session waits on ([`pending_offer`]): Waiting,
 ///    "offer". The registry shows such a session busy (its tool call blocks).
 /// 1. Registry "waiting" (permission, question tool, dialog): Waiting, with
-///    the registry's reason.
+///    the registry's reason ([`registry_reason`]: "plan approval" for a plan).
 /// 2. Registry "busy" while a turn runs: Working. The registry also stays
 ///    busy while background tasks outlive the turn; the turn counts as over
 ///    when the transcript ended it and the registry did not go busy again
@@ -281,7 +283,7 @@ pub fn derive_state(input: &StateInput) -> DerivedState {
     if status == "waiting" {
         return DerivedState {
             state: SessionState::Waiting,
-            waiting_for: clean(input.registry_waiting_for),
+            waiting_for: registry_reason(input),
             since: status_since,
             ..DerivedState::default()
         };
@@ -561,6 +563,21 @@ pub fn pending_question(input: &StateInput) -> Option<PendingQuestion> {
     }))
 }
 
+/// The registry's waiting reason; [`WAITING_PLAN_APPROVAL`] when the call
+/// waiting for permission is `ExitPlanMode`, which the CLI reports as a
+/// plain "permission prompt".
+fn registry_reason(input: &StateInput) -> Option<String> {
+    let reason = clean(input.registry_waiting_for);
+    let plan = input
+        .transcript
+        .and_then(|t| t.current_tool.as_ref())
+        .is_some_and(|tool| tool.name == "ExitPlanMode");
+    if plan && reason.as_deref().is_none_or(|r| r.eq_ignore_ascii_case("permission prompt")) {
+        return Some(WAITING_PLAN_APPROVAL.to_owned());
+    }
+    reason
+}
+
 /// The task offer a live session waits on: the person asked for a task, and
 /// Desktop blocks the session until they choose "New session" or "Do it
 /// here" (the latest one when several are left). Not once "New session" was
@@ -808,7 +825,10 @@ fn build_view(
         return None;
     }
     let transcript = input.transcripts.get(&entry.session_id);
-    let (git, pr) = input.git_pr.get(key).cloned().unwrap_or_default();
+    let (git, mut pr) = input.git_pr.get(key).cloned().unwrap_or_default();
+    if let Some(pr) = pr.as_mut() {
+        pr.auto_fix = auto_fix_watches(input, desktop, pr);
+    }
     let derived = derive_state(&StateInput {
         now_ms: input.now_ms,
         status: entry.status.as_deref(),
@@ -879,7 +899,37 @@ fn build_view(
         context_exceeded_count: desktop.and_then(|d| d.context_exceeded_count),
         last_error: derived.error,
         version: clean(entry.version.as_deref()),
+        findings: transcript
+            .and_then(|t| t.findings.clone())
+            .filter(|f| f.open > 0),
     })
+}
+
+/// Desktop's Auto-fix watches `pr` for this session: Desktop runs (it
+/// started a process still alive), the session is not archived, the PR is
+/// open, and it is one of the session's Auto-fix cards (same number and
+/// repository, or same link).
+fn auto_fix_watches(input: &AggregateInput, desktop: Option<&DesktopSession>, pr: &PrInfo) -> bool {
+    let Some(desktop) = desktop.filter(|d| !d.is_archived) else {
+        return false;
+    };
+    let desktop_runs = input.registry.iter().any(is_desktop_entry);
+    let open = pr.state.trim().eq_ignore_ascii_case("OPEN");
+    let same_repo = |card: Option<&str>| match (non_blank(card), non_blank(pr.repository.as_deref())) {
+        (Some(card), Some(shown)) => card.eq_ignore_ascii_case(shown),
+        _ => true,
+    };
+    let link = |url: &str| url.trim().trim_end_matches('/').to_ascii_lowercase();
+    desktop_runs
+        && open
+        && desktop.auto_fix_prs.iter().any(|card| {
+            let by_number = card.number == Some(pr.number) && same_repo(card.repository.as_deref());
+            let by_link = card
+                .url
+                .as_deref()
+                .is_some_and(|url| !pr.url.trim().is_empty() && link(url) == link(&pr.url));
+            by_number || by_link
+        })
 }
 
 /// Registry cwd, else the Desktop file's cwd.
@@ -1233,7 +1283,10 @@ fn count_sessions(sessions: &[SessionView]) -> Counts {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{PlanItem, PlanProgress, SideNote, TaskSuggestion, TurnInfo, TurnSummary};
+    use crate::model::{
+        DesktopPrBinding, FindingsReport, PlanItem, PlanProgress, SideNote, TaskSuggestion,
+        TurnInfo, TurnSummary,
+    };
     use SessionState::{Error, Idle, Unseen, Waiting, Working};
 
     const NOW: i64 = 1_800_000_000_000;
@@ -2773,6 +2826,125 @@ mod tests {
         // Without git yet: the folder's name.
         f.git_pr.clear();
         assert_eq!(f.snapshot().proposed_tasks[0].project, "ui");
+    }
+
+    // --- plans, reviews, Auto-fix -----------------------------------------
+
+    #[test]
+    fn a_plan_to_approve_is_named() {
+        let planning = TranscriptInfo {
+            current_tool: Some(ToolActivity {
+                name: "ExitPlanMode".to_owned(),
+                summary: "Plan : migrer le cache".to_owned(),
+                at: Some(NOW - MIN),
+            }),
+            ..turn(TurnOrigin::Human, NOW - 10 * MIN, None)
+        };
+        let reason = |registry: Option<&str>, transcript: &TranscriptInfo| {
+            derive_state(&StateInput {
+                registry_waiting_for: registry,
+                transcript: Some(transcript),
+                ..input("waiting")
+            })
+            .waiting_for
+        };
+        assert_eq!(reason(Some("permission prompt"), &planning).as_deref(), Some(WAITING_PLAN_APPROVAL));
+        assert_eq!(reason(None, &planning).as_deref(), Some(WAITING_PLAN_APPROVAL));
+        // Another kind of wait keeps its own reason.
+        assert_eq!(reason(Some("dialog open"), &planning).as_deref(), Some("dialog open"));
+        let editing = TranscriptInfo {
+            current_tool: Some(tool("Edit", NOW - MIN)),
+            ..planning.clone()
+        };
+        assert_eq!(reason(Some("permission prompt"), &editing).as_deref(), Some("permission prompt"));
+    }
+
+    #[test]
+    fn review_findings_show_while_some_are_open() {
+        let report = |open: u32| FindingsReport {
+            count: 4,
+            confirmed: 2,
+            open,
+            at: Some(NOW - MIN),
+        };
+        let mut f = Fixture::new();
+        f.live(entry(1, "local_a")).file(desk("local_a"));
+        f.transcripts.insert(
+            "cli-1".to_owned(),
+            TranscriptInfo {
+                findings: Some(report(3)),
+                ..TranscriptInfo::default()
+            },
+        );
+        assert_eq!(f.view("local_a").findings, Some(report(3)));
+        if let Some(t) = f.transcripts.get_mut("cli-1") {
+            t.findings = Some(report(0));
+        }
+        assert_eq!(f.view("local_a").findings, None, "all handled");
+    }
+
+    #[test]
+    fn auto_fix_marks_the_watched_open_pr_while_desktop_runs() {
+        let card = |number: u32, repository: Option<&str>| DesktopPrBinding {
+            number: Some(number),
+            url: None,
+            repository: repository.map(str::to_owned),
+            state: Some("OPEN".to_owned()),
+        };
+        let shown = PrInfo {
+            repository: Some("Owner/Repo".to_owned()),
+            ..pr("OPEN", ChecksState::Fail)
+        };
+        let marked = |cards: Vec<DesktopPrBinding>, shown: PrInfo, archived: bool, live: bool| {
+            let mut f = Fixture::new();
+            f.file(DesktopSession {
+                auto_fix_prs: cards,
+                is_archived: archived,
+                ..desk("local_a")
+            });
+            if live {
+                f.live(entry(1, "local_a"));
+            }
+            f.git_pr.insert("local_a".to_owned(), (None, Some(shown)));
+            f.snapshot()
+                .sessions
+                .iter()
+                .find(|s| s.key == "local_a")
+                .and_then(|s| s.pr.as_ref())
+                .map(|pr| pr.auto_fix)
+        };
+        assert_eq!(marked(vec![card(7, Some("owner/repo"))], shown.clone(), false, true), Some(true));
+        assert_eq!(marked(vec![card(7, None)], shown.clone(), false, true), Some(true));
+        // Another PR, or another repository.
+        assert_eq!(marked(vec![card(8, Some("owner/repo"))], shown.clone(), false, true), Some(false));
+        assert_eq!(marked(vec![card(7, Some("owner/other"))], shown.clone(), false, true), Some(false));
+        // By link, whatever the number.
+        let by_link = DesktopPrBinding {
+            number: None,
+            url: Some("https://github.com/o/r/pull/7/".to_owned()),
+            repository: None,
+            state: None,
+        };
+        assert_eq!(marked(vec![by_link], shown.clone(), false, true), Some(true));
+        // Merged since, or Desktop closed: nothing watches it.
+        let merged = PrInfo {
+            state: "MERGED".to_owned(),
+            ..shown.clone()
+        };
+        assert_eq!(marked(vec![card(7, None)], merged, false, true), Some(false));
+        assert_eq!(marked(vec![card(7, None)], shown.clone(), false, false), None, "not listed");
+        let mut f = Fixture::new();
+        // Desktop runs (another session's process), this session is stopped.
+        f.live(entry(2, "local_other")).file(desk("local_other"));
+        f.file(DesktopSession {
+            auto_fix_prs: vec![card(7, None)],
+            ..stopped_unseen("local_a")
+        });
+        f.git_pr.insert("local_a".to_owned(), (None, Some(shown.clone())));
+        assert_eq!(f.view("local_a").pr.map(|pr| pr.auto_fix), Some(true));
+        // No process Desktop started is alive: Desktop is closed.
+        f.registry.clear();
+        assert_eq!(f.view("local_a").pr.map(|pr| pr.auto_fix), Some(false));
     }
 
     // --- one session -------------------------------------------------------

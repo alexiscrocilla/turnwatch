@@ -46,6 +46,19 @@ export interface PrInfo {
   mergeState: string | null;
   checkedAt: number;
   source: "desktop" | "gh-branch" | string;
+  /** Desktop's Auto-fix watches this open PR (and Desktop runs): a failing CI, a
+   * conflict or a review comment wakes the session to handle it. */
+  autoFix: boolean;
+}
+
+/** A code review's findings, as the session reported them. */
+export interface FindingsReport {
+  count: number;
+  /** Verified as real. */
+  confirmed: number;
+  /** Not handled yet (fixed, skipped…). */
+  open: number;
+  at: number | null;
 }
 
 export interface SessionRef {
@@ -94,8 +107,9 @@ export interface SessionView {
   state: SessionState;
   /** Registry reason ("input needed", "permission prompt", "sandbox request",
    * "worker request", "dialog open"), "decision" (turn ended on a question),
-   * "probable question" (last message ends with a question mark) or "offer"
-   * (blocked until the person picks "New session" or "Do it here"). */
+   * "probable question" (last message ends with a question mark), "offer"
+   * (blocked until the person picks "New session" or "Do it here") or
+   * "plan approval" (a plan to approve; `activity` holds its title). */
   waitingFor: string | null;
   question: PendingQuestion | null;
   stateSince: number | null;
@@ -119,6 +133,8 @@ export interface SessionView {
   contextExceededCount: number | null;
   lastError: string | null;
   version: string | null;
+  /** The latest review's findings, while some are open and the person has not written since. */
+  findings: FindingsReport | null;
 }
 
 export interface Counts {

@@ -16,8 +16,8 @@ use serde::de::{self, Deserialize, Deserializer, IgnoredAny, MapAccess, SeqAcces
 use serde_json::Value;
 
 use crate::model::{
-    ErrorMark, PendingQuestion, PlanItem, PlanProgress, ToolActivity, TranscriptInfo, TurnInfo,
-    TurnOrigin,
+    ErrorMark, FindingsReport, PendingQuestion, PlanItem, PlanProgress, ToolActivity,
+    TranscriptInfo, TurnInfo, TurnOrigin,
 };
 
 /// Minimum delay between two searches for a transcript that was not found.
@@ -323,6 +323,11 @@ struct TranscriptState {
     ask_undo: Option<AskUndo>,
     /// API error of a turn, with the number of that turn.
     api_error: Option<(ErrorMark, u64)>,
+    /// The latest review reported and accepted, until the person's next prompt.
+    findings: Option<FindingsReport>,
+    /// A `ReportFindings` call waiting for its result: kept only if accepted
+    /// (the CLI rejects malformed findings).
+    findings_call: Option<(String, FindingsReport)>,
 }
 
 /// A tool call waiting for its result.
@@ -396,6 +401,12 @@ impl TranscriptState {
             "assistant" => self.apply_assistant(line, at),
             "user" => self.apply_user(line, at),
             "system" => self.apply_system(&line, at),
+            // The person wrote mid-turn: the review is no longer news. The
+            // message joins the running turn, so nothing else changes.
+            "attachment" if line.queued_human_prompt => {
+                self.findings = None;
+                self.findings_call = None;
+            }
             _ => {}
         }
     }
@@ -531,6 +542,8 @@ impl TranscriptState {
             self.pending_ask = None;
             self.ask_undo = None;
             self.api_error = None;
+            self.findings = None;
+            self.findings_call = None;
         }
     }
 
@@ -595,6 +608,9 @@ impl TranscriptState {
         if is_wrap_up(&name) {
             self.on_wrap_up(&id, &input, at);
         }
+        if name == REPORT_FINDINGS && !id.is_empty() {
+            self.findings_call = findings_report(&input, at).map(|report| (id.clone(), report));
+        }
         self.apply_plan_tool(&id, &name, &input, at);
     }
 
@@ -620,6 +636,13 @@ impl TranscriptState {
 
     fn on_tool_result(&mut self, id: &str, is_error: bool) {
         self.open_tools.retain(|t| t.id != id);
+        if let Some((call_id, report)) = self.findings_call.take() {
+            if call_id != id {
+                self.findings_call = Some((call_id, report));
+            } else if !is_error {
+                self.findings = Some(report);
+            }
+        }
         if let Some((undo_id, previous)) = self.plan_undo.take() {
             if undo_id == id {
                 if is_error {
@@ -821,8 +844,34 @@ impl TranscriptState {
             notable_turn_ended_at: self.notable_turn_ended_at,
             pending_ask: self.pending_ask.clone(),
             api_error: self.api_error.as_ref().map(|(error, _)| error.clone()),
+            findings: self.findings.clone(),
         }
     }
+}
+
+/// The CLI tool that reports a code review's findings.
+const REPORT_FINDINGS: &str = "ReportFindings";
+
+/// `ReportFindings {level, findings: [{verdict?, outcome?, …}]}`: how many
+/// findings, how many verified as real, how many not handled yet. None
+/// without a findings list.
+fn findings_report(input: &Value, at: Option<i64>) -> Option<FindingsReport> {
+    let findings = input.get("findings")?.as_array()?;
+    let confirmed = findings
+        .iter()
+        .filter(|f| str_field(f, "verdict").is_some_and(|v| v.trim().eq_ignore_ascii_case("CONFIRMED")))
+        .count();
+    let open = findings
+        .iter()
+        .filter(|f| str_field(f, "outcome").is_none_or(|o| o.trim().is_empty()))
+        .count();
+    let n = |count: usize| u32::try_from(count).unwrap_or(u32::MAX);
+    Some(FindingsReport {
+        count: n(findings.len()),
+        confirmed: n(confirmed),
+        open: n(open),
+        at,
+    })
 }
 
 /// `mcp__<server>__ccd_turn__wrap_up` or `mcp__ccd_turn__wrap_up`.
@@ -1304,11 +1353,35 @@ pub fn summarize_tool(name: &str, input: &serde_json::Value) -> String {
         "TaskCreate" => first_str(input, &["subject", "description"]),
         "TaskUpdate" => task_update_summary(input),
         "AskUserQuestion" => ask_summary(input),
+        "ExitPlanMode" => return plan_title(input),
         "SendMessage" => send_message_summary(input),
         "Skill" => first_str(input, &["skill"]),
         _ => generic_summary(input),
     };
     one_line(&raw, SUMMARY_MAX)
+}
+
+/// `ExitPlanMode {plan}`: the plan's first line that says something (its
+/// title, usually a Markdown heading), as plain text, without a leading
+/// "Plan:" (the window already says it is a plan).
+fn plan_title(input: &Value) -> String {
+    let title = str_field(input, "plan")
+        .unwrap_or_default()
+        .lines()
+        .map(|line| plain_text(line, SUMMARY_MAX))
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    let rest = title
+        .get(..4)
+        .filter(|word| word.eq_ignore_ascii_case("plan"))
+        .map(|_| title[4..].trim_start())
+        .and_then(|rest| rest.strip_prefix([':', '-', '–', '—']))
+        .map(str::trim_start)
+        .filter(|rest| !rest.is_empty());
+    match rest {
+        Some(rest) => rest.to_owned(),
+        None => title,
+    }
 }
 
 /// The command when it is one short line, else its description.
@@ -1842,6 +1915,8 @@ struct Line {
     is_api_error: bool,
     /// `error` of an API error line ("rate_limit"…).
     error: Option<String>,
+    /// An attachment line holding a message the person sent mid-turn.
+    queued_human_prompt: bool,
 }
 
 /// `message.content`: a plain string or a list of blocks.
@@ -1887,6 +1962,7 @@ enum Field {
     PreventedContinuation,
     IsApiErrorMessage,
     Error,
+    Attachment,
     Other,
 }
 
@@ -1920,6 +1996,7 @@ impl<'de> Deserialize<'de> for Field {
                     "preventedContinuation" => Field::PreventedContinuation,
                     "isApiErrorMessage" => Field::IsApiErrorMessage,
                     "error" => Field::Error,
+                    "attachment" => Field::Attachment,
                     _ => Field::Other,
                 })
             }
@@ -2018,6 +2095,9 @@ impl<'de> Deserialize<'de> for Line {
                         }
                         Field::IsApiErrorMessage => line.is_api_error = is_true(map.next_value()?),
                         Field::Error => line.error = into_string(map.next_value()?),
+                        Field::Attachment => {
+                            line.queued_human_prompt = is_queued_human_prompt(&map.next_value()?);
+                        }
                         _ => {
                             map.next_value::<IgnoredAny>()?;
                         }
@@ -2032,6 +2112,20 @@ impl<'de> Deserialize<'de> for Line {
 
 fn is_true(value: Value) -> bool {
     value.as_bool() == Some(true)
+}
+
+/// An `attachment` holding a message the person sent while a turn ran: the
+/// CLI files it as `{"type":"queued_command","commandMode":"prompt",
+/// "origin":{"kind":"human"}}` and the turn takes it in without a user line.
+fn is_queued_human_prompt(attachment: &Value) -> bool {
+    let field = |key: &str| attachment.get(key).and_then(Value::as_str);
+    let origin = attachment
+        .get("origin")
+        .and_then(|o| o.get("kind"))
+        .and_then(Value::as_str);
+    field("type") == Some("queued_command")
+        && field("commandMode").is_none_or(|mode| mode == "prompt")
+        && origin.is_none_or(|kind| kind == "human")
 }
 
 /// The `content` and `id` of a `message` object.
@@ -2143,6 +2237,112 @@ mod tests {
     const SESSION: &str = "0f0e0d0c-1111-4222-8333-444455556666";
     const UPDATE_PLAN: &str = "mcp__ccd_turn__update_plan";
     const WRAP_UP: &str = "mcp__ccd_turn__wrap_up";
+
+    // --- review findings and plans ----------------------------------------
+
+    fn findings_call(id: &str, findings: Value, ts: &str) -> String {
+        assistant_tool(id, "ReportFindings", json!({"level": "high", "findings": findings}), ts)
+    }
+
+    #[test]
+    fn accepted_findings_are_kept_until_the_next_prompt() {
+        let found = json!([
+            {"file": "a.rs", "summary": "x", "verdict": "CONFIRMED"},
+            {"file": "b.rs", "summary": "y", "verdict": "PLAUSIBLE"},
+            {"file": "c.rs", "summary": "z"}
+        ]);
+        let mut lines = vec![
+            prompt("Relis la branche", None, &at(1)),
+            findings_call("toolu_f1", found, &at(2)),
+        ];
+        // No result yet: not reported.
+        assert_eq!(info_of(&lines.join("\n")).findings, None);
+        lines.push(tool_result("toolu_f1", false, &at(3)));
+        lines.push(stop(&at(4)));
+        let report = info_of(&lines.join("\n")).findings.expect("findings");
+        assert_eq!((report.count, report.confirmed, report.open), (3, 1, 3));
+        assert_eq!(report.at, parse_iso8601_ms(&at(2)));
+
+        // A rejected re-report keeps the accepted one.
+        lines.push(findings_call("toolu_f2", json!([{"verdict": "CONFIRMED"}]), &at(5)));
+        lines.push(tool_result("toolu_f2", true, &at(6)));
+        assert_eq!(info_of(&lines.join("\n")).findings.map(|f| f.count), Some(3));
+
+        // Fixed: a re-report with outcomes.
+        let fixed = json!([
+            {"verdict": "CONFIRMED", "outcome": "fixed"},
+            {"verdict": "PLAUSIBLE", "outcome": "skipped"},
+            {"outcome": " "}
+        ]);
+        lines.push(findings_call("toolu_f3", fixed, &at(7)));
+        lines.push(tool_result("toolu_f3", false, &at(8)));
+        let report = info_of(&lines.join("\n")).findings.expect("findings");
+        assert_eq!((report.count, report.open), (3, 1));
+
+        // Another session's ping does not clear it; the person's prompt does.
+        lines.push(prompt("Rapport d'une autre session", Some("peer"), &at(9)));
+        assert!(info_of(&lines.join("\n")).findings.is_some());
+        lines.push(prompt("Corrige le reste", None, &at(10)));
+        assert_eq!(info_of(&lines.join("\n")).findings, None);
+    }
+
+    /// A message the person (or another source) sent while a turn ran.
+    fn queued(origin: &str, ts: &str) -> String {
+        json!({
+            "parentUuid": "p", "isSidechain": false, "type": "attachment",
+            "attachment": {"type": "queued_command", "prompt": "…", "commandMode": "prompt",
+                "origin": {"kind": origin}},
+            "uuid": format!("q-{ts}"), "timestamp": ts, "sessionId": SESSION
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn a_message_sent_mid_turn_clears_the_findings() {
+        let mut lines = vec![
+            prompt("Relis", None, &at(1)),
+            findings_call("toolu_f", json!([{"verdict": "CONFIRMED"}]), &at(2)),
+            tool_result("toolu_f", false, &at(3)),
+            queued("peer", &at(4)),
+        ];
+        assert!(info_of(&lines.join("\n")).findings.is_some(), "not the person");
+        lines.push(queued("human", &at(5)));
+        let info = info_of(&lines.join("\n"));
+        assert_eq!(info.findings, None);
+        // It joins the running turn: no new turn starts.
+        assert!(info.turn.is_some_and(|t| t.started_at == parse_iso8601_ms(&at(1))));
+    }
+
+    #[test]
+    fn a_findings_call_without_list_reports_nothing() {
+        let lines = [
+            prompt("Relis", None, &at(1)),
+            assistant_tool("toolu_f", "ReportFindings", json!({"level": "low"}), &at(2)),
+            tool_result("toolu_f", false, &at(3)),
+        ];
+        assert_eq!(info_of(&lines.join("\n")).findings, None);
+    }
+
+    #[test]
+    fn exit_plan_mode_is_summed_up_by_the_plan_title() {
+        let plan = "\n\n## Plan : *migrer* le cache\n\n1. Lire le code\n2. Écrire les tests";
+        let title = |plan: &str| summarize_tool("ExitPlanMode", &json!({"plan": plan}));
+        assert_eq!(title(plan), "migrer le cache");
+        assert_eq!(title("# Plan: Move thumbnails to the CDN"), "Move thumbnails to the CDN");
+        assert_eq!(title("# Plan — étape 2"), "étape 2");
+        // A title that only starts with the word keeps it.
+        assert_eq!(title("# Planifier la migration"), "Planifier la migration");
+        assert_eq!(title("# Plan de migration"), "Plan de migration");
+        assert_eq!(title("# Plan:"), "Plan:");
+        assert_eq!(title("# Pl"), "Pl");
+        assert_eq!(summarize_tool("ExitPlanMode", &json!({})), "");
+        let lines = [
+            prompt("Planifie", None, &at(1)),
+            assistant_tool("toolu_p", "ExitPlanMode", json!({"plan": plan}), &at(2)),
+        ];
+        let tool = info_of(&lines.join("\n")).current_tool.expect("waiting call");
+        assert_eq!((tool.name.as_str(), tool.summary.as_str()), ("ExitPlanMode", "migrer le cache"));
+    }
 
     /// `2026-10-22T10:00:<seconds>Z`.
     fn at(seconds: u32) -> String {

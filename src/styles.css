@@ -252,8 +252,9 @@ button {
   color: var(--text-muted);
 }
 
+/* Neutral until it gets close to the limit: only amber and red call for attention. */
 .meter {
-  --meter-color: var(--accent);
+  --meter-color: var(--text-muted);
   flex: 0 1 auto;
   min-width: 0;
   display: flex;
@@ -847,6 +848,11 @@ button {
   color: var(--error-text);
 }
 
+/* A finished code review: how many findings wait to be looked at. */
+.line--findings {
+  color: var(--unseen-text);
+}
+
 .plan {
   display: flex;
   align-items: center;
@@ -941,6 +947,13 @@ button {
 
 .chip--draft {
   border-style: dashed;
+}
+
+/* Auto-fix watches the PR: a small circling arrow after the number. */
+.chip-autofix {
+  width: 12px;
+  height: 12px;
+  stroke-width: 1.75;
 }
 
 /* ------------------------------------------------------------------ */

@@ -105,6 +105,11 @@ pub struct DesktopSession {
     /// proposed and the person has not acted on (Desktop removes a card from
     /// the list once it is started, dismissed or expired).
     pub suggestions: Vec<TaskSuggestion>,
+    /// PRs of the `prs` list that Desktop's Auto-fix watches: `autoFix` on,
+    /// not inherited, not dismissed, not merged or closed, on GitHub (the
+    /// rule Desktop applies). Desktop wakes the session when their CI fails,
+    /// they conflict or get review comments.
+    pub auto_fix_prs: Vec<DesktopPrBinding>,
 }
 
 /// One entry of `backgroundTaskSuggestions`.
@@ -227,6 +232,22 @@ pub struct TranscriptInfo {
     /// API error (rate limit, expired login…) that ended a turn, until the
     /// person's next prompt or a successful answer in the same turn.
     pub api_error: Option<ErrorMark>,
+    /// The latest code review the session reported (`ReportFindings`, call
+    /// accepted), until the person's next prompt.
+    pub findings: Option<FindingsReport>,
+}
+
+/// A code review's findings, as the session reported them.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindingsReport {
+    /// Findings reported.
+    pub count: u32,
+    /// Of them, verified as real (`verdict` "CONFIRMED").
+    pub confirmed: u32,
+    /// Of them, not handled yet (no `outcome`: fixed, skipped…).
+    pub open: u32,
+    pub at: Option<i64>,
 }
 
 /// Who started a turn.
@@ -337,6 +358,11 @@ pub struct PrInfo {
     /// "desktop" when found through Desktop's binding, "gh-branch" when found
     /// by `gh pr list --head <branch>`.
     pub source: String,
+    /// Desktop's Auto-fix watches this open PR and Desktop runs: a failing
+    /// CI, a conflict or a review comment wakes the session to handle it.
+    /// Set when the snapshot is built.
+    #[serde(default)]
+    pub auto_fix: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -484,8 +510,10 @@ pub struct SessionView {
     /// request", "worker request", "dialog open"), or "decision" when the turn
     /// ended on a question (wrap_up `ask`/`blocked`, Desktop's `blocked`
     /// summary), "probable question" when the last message ends with a
-    /// question mark and nothing more reliable says so, or "offer" when the
-    /// session waits for "New session" or "Do it here" on a task offer.
+    /// question mark and nothing more reliable says so, "offer" when the
+    /// session waits for "New session" or "Do it here" on a task offer, or
+    /// "plan approval" when the permission asked is to approve a plan
+    /// (`ExitPlanMode`).
     pub waiting_for: Option<String>,
     /// The question the session ended its turn on, when known.
     pub question: Option<PendingQuestion>,
@@ -513,6 +541,9 @@ pub struct SessionView {
     pub context_exceeded_count: Option<u32>,
     pub last_error: Option<String>,
     pub version: Option<String>,
+    /// The latest code review's findings, while some are not handled and the
+    /// person has not written since.
+    pub findings: Option<FindingsReport>,
 }
 
 /// A question the session asked at the end of its turn and that the user has
