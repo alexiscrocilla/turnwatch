@@ -321,6 +321,7 @@ function sanitizeSession(raw: unknown): SessionView | null {
     git: isObj(raw.git) ? s.git : null,
     pr,
     parent: isObj(raw.parent) ? s.parent : null,
+    nestUnder: typeof raw.nestUnder === "string" && raw.nestUnder !== "" && raw.nestUnder !== raw.key ? raw.nestUnder : null,
     messages: {
       awaitingReply: peerLinks(messages.awaitingReply),
       undelivered: peerLinks(messages.undelivered),
@@ -515,6 +516,8 @@ const ICONS = {
   warn: ["M8 2.5 14.5 13.5h-13z", "M8 6.5v3", "M8 11.5v.2"],
   eye: ["M1.5 8S3.9 3.5 8 3.5 14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z", circle(8, 8, 2)],
   plus: ["M8 3.5v9", "M3.5 8h9"],
+  // Points right; turned down while what it folds is shown.
+  chevron: ["M6.5 4l4 4-4 4"],
   // Circling arrow: something keeps an eye on it and acts by itself.
   autoFix: ["M12.5 8a4.5 4.5 0 1 1-1.3-3.2", "M12.5 2.5v2.8H9.7"],
 } satisfies Record<string, string[]>;
@@ -1136,32 +1139,105 @@ const STATE_RANK: Record<SessionState, number> = { waiting: 0, error: 1, unseen:
 interface Group {
   key: string;
   label: string;
+  /** Every session of the group, nested ones included. */
   sessions: SessionView[];
-  /** "New task" cards proposed in the project, newest first, after its sessions. */
+  /** Every "New task" card of the group, nested ones included. */
   tasks: ProposedTask[];
+  families: Family[];
+  /** Tasks whose session is not listed: after the families, newest first. */
+  loose: ProposedTask[];
   /** Index of the group's first session in the backend order (tasks count after every session). */
   first: number;
 }
 
 /**
+ * A session and what hangs from it, nested as in Desktop's sidebar: at one
+ * level under the root, each session followed by what hangs from it, its
+ * sessions before the tasks it proposed.
+ */
+interface Family {
+  root: SessionView;
+  members: Member[];
+  /** Index of the family's first session in the backend order. */
+  first: number;
+}
+
+type Member = { kind: "session"; s: SessionView } | { kind: "task"; t: ProposedTask };
+
+/**
  * Sessions and proposed tasks by project. Groups holding a waiting session come
  * first (the one waiting longest first), then error, unseen, working, idle-only
- * groups, and last the groups with tasks only. Inside a group the backend order
- * (by urgency) is kept.
+ * groups, and last the groups with tasks only. A session shows under the one
+ * it comes from (`nestUnder`), with the tasks it proposed: the family goes
+ * where its root's project is, at the place of its most urgent session, as
+ * Desktop places a family at its most recent member. Otherwise the backend
+ * order (by urgency) is kept.
  */
 function groupSessions(sessions: readonly SessionView[], tasks: readonly ProposedTask[]): Group[] {
+  const index = new Map(sessions.map((s, i) => [s.key, i]));
+  // Links up, each kept unless it closes a loop: the backend never sends
+  // one, but a loop would drop its sessions from the list.
+  const up = new Map<string, string>();
+  const rootOf = (key: string): string => {
+    let k = key;
+    for (let hops = 0; hops <= sessions.length; hops++) {
+      const next = up.get(k);
+      if (next === undefined) break;
+      k = next;
+    }
+    return k;
+  };
+  for (const s of sessions) {
+    const parent = s.nestUnder;
+    if (parent !== null && parent !== s.key && index.has(parent) && rootOf(parent) !== s.key) up.set(s.key, parent);
+  }
+  const children = new Map<string, SessionView[]>();
+  for (const s of sessions) {
+    const parent = up.get(s.key);
+    if (parent !== undefined) children.set(parent, [...(children.get(parent) ?? []), s]);
+  }
+  const proposed = new Map<string, ProposedTask[]>();
+  const loose: ProposedTask[] = [];
+  for (const t of tasks) {
+    if (index.has(t.sessionKey)) proposed.set(t.sessionKey, [...(proposed.get(t.sessionKey) ?? []), t]);
+    else loose.push(t);
+  }
+
   const byKey = new Map<string, Group>();
   const groupOf = (project: string, first: number): Group => {
     const key = project.trim();
     let group = byKey.get(key);
     if (!group) {
-      group = { key, label: key || "Sans projet", sessions: [], tasks: [], first };
+      group = { key, label: key || "Sans projet", sessions: [], tasks: [], families: [], loose: [], first };
       byKey.set(key, group);
     }
+    group.first = Math.min(group.first, first);
     return group;
   };
-  sessions.forEach((s, i) => groupOf(s.project, i).sessions.push(s));
-  tasks.forEach((t, i) => groupOf(t.project, sessions.length + i).tasks.push(t));
+  for (const root of sessions) {
+    if (up.has(root.key)) continue;
+    const members: Member[] = [];
+    const visit = (key: string): void => {
+      for (const s of children.get(key) ?? []) {
+        members.push({ kind: "session", s });
+        visit(s.key);
+      }
+      for (const t of proposed.get(key) ?? []) members.push({ kind: "task", t });
+    };
+    visit(root.key);
+    const family = [root, ...members.flatMap((m) => (m.kind === "session" ? [m.s] : []))];
+    const first = Math.min(...family.map((s) => index.get(s.key) ?? 0));
+    const group = groupOf(root.project, first);
+    group.families.push({ root, members, first });
+    group.sessions.push(...family);
+    group.tasks.push(...members.flatMap((m) => (m.kind === "task" ? [m.t] : [])));
+  }
+  loose.forEach((t, i) => {
+    const group = groupOf(t.project, sessions.length + i);
+    group.loose.push(t);
+    group.tasks.push(t);
+  });
+  for (const group of byKey.values()) group.families.sort((a, b) => a.first - b.first);
   const rank = (g: Group): number =>
     g.sessions.length ? Math.min(...g.sessions.map((s) => STATE_RANK[s.state])) : STATE_RANK.idle + 1;
   const waitingSince = (g: Group): number =>
@@ -1249,7 +1325,7 @@ function renderList(): void {
   const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const activeCard = active && ui.cards.contains(active) ? active.closest<HTMLElement>(".card") : null;
   const focusKey = activeCard?.dataset.key ?? null;
-  const focusPr = active?.dataset.focus === "pr";
+  const focusPart = active?.dataset.focus ?? null;
   const focusIndex = activeCard ? cardsInOrder().indexOf(activeCard) : -1;
   const keepCards = new Set<string>();
   const keepGroups = new Set<string>();
@@ -1267,8 +1343,13 @@ function renderList(): void {
     prevGroup = group.el;
 
     let prev: HTMLElement | null = null;
-    for (const s of g.sessions) {
-      keepCards.add(s.key);
+    const put = (key: string, entry: CardEntry, level: 1 | 2): void => {
+      keepCards.add(key);
+      setAttr(entry.el, "aria-level", String(level));
+      place(group.list, entry.el, prev);
+      prev = entry.el;
+    };
+    const putSession = (s: SessionView, nest: Nest): void => {
       let entry = cardEntries.get(s.key);
       if (entry && (entry.hit !== null) !== s.isDesktop) {
         entry.el.remove();
@@ -1278,22 +1359,44 @@ function renderList(): void {
         entry = createCard(s);
         cardEntries.set(s.key, entry);
       }
-      fillCard(entry, s);
-      place(group.list, entry.el, prev);
-      prev = entry.el;
-    }
-    for (const t of g.tasks) {
+      fillCard(entry, s, nest);
+      put(s.key, entry, nest.nested ? 2 : 1);
+    };
+    const putTask = (t: ProposedTask, nest: Nest): void => {
       const key = taskKey(t);
-      keepCards.add(key);
       let entry = cardEntries.get(key);
       if (!entry) {
         entry = createTaskCard(t);
         cardEntries.set(key, entry);
       }
-      fillTaskCard(entry, t);
-      place(group.list, entry.el, prev);
-      prev = entry.el;
+      fillTaskCard(entry, t, nest);
+      put(key, entry, nest.nested ? 2 : 1);
+    };
+
+    for (const family of g.families) {
+      const { root, members } = family;
+      const open = !collapsedFamilies.includes(root.key);
+      // Folded, the sessions that need the person stay in view.
+      const shown = open ? members : members.filter((m) => m.kind === "session" && needsYou(m.s));
+      const hidden = open ? [] : members.filter((m) => !shown.includes(m));
+      putSession(root, { ...TOP, fold: members.length ? { key: root.key, open } : null });
+      shown.forEach((m, i) => {
+        const nest: Nest = { nested: true, last: i === shown.length - 1 && hidden.length === 0, fold: null };
+        if (m.kind === "session") putSession(m.s, nest);
+        else putTask(m.t, nest);
+      });
+      if (hidden.length) {
+        const key = foldKey(root.key);
+        let entry = cardEntries.get(key);
+        if (!entry) {
+          entry = createFoldCard(root.key);
+          cardEntries.set(key, entry);
+        }
+        fillFoldCard(entry, hidden);
+        put(key, entry, 2);
+      }
     }
+    for (const t of g.loose) putTask(t, TOP);
   }
 
   for (const [key, entry] of cardEntries) {
@@ -1307,7 +1410,7 @@ function renderList(): void {
     groupEntries.delete(key);
   }
 
-  if (focusKey && !ui.cards.contains(document.activeElement)) restoreFocus(focusKey, focusPr, focusIndex);
+  if (focusKey && !ui.cards.contains(document.activeElement)) restoreFocus(focusKey, focusPart, focusIndex);
 
   ui.empty.hidden = sessions.length > 0 || tasks.length > 0;
   if (!ui.empty.hidden) {
@@ -1317,12 +1420,16 @@ function renderList(): void {
   }
 }
 
-/** Puts the focus back on the same card, or on the card now at its place if it left. */
-function restoreFocus(key: string, pr: boolean, index: number): void {
+/**
+ * Puts the focus back on the same card (on its PR chip or fold button when
+ * `part` names it), or on the card now at its place if it left.
+ */
+function restoreFocus(key: string, part: string | null, index: number): void {
   const entry = cardEntries.get(key);
   let target: HTMLElement | null = null;
   if (entry) {
-    target = (pr ? entry.el.querySelector<HTMLElement>('[data-focus="pr"]') : null) ?? entry.hit;
+    const inner = part ? entry.el.querySelector<HTMLElement>(`[data-focus="${part}"]`) : null;
+    target = inner ?? entry.hit;
   } else {
     const cards = cardsInOrder();
     const at = Math.max(index, 0);
@@ -1357,15 +1464,127 @@ function createCard(s: SessionView): CardEntry {
   return { el, hit, desc, sig: "", parts: new Map() };
 }
 
-function fillCard(entry: CardEntry, s: SessionView): void {
+/** Where a card sits in its family. */
+interface Nest {
+  /** Under the family's root, indented and joined to it by a line. */
+  nested: boolean;
+  /** The family's last card: the line turns into it and stops. */
+  last: boolean;
+  /** A root with something under it: its fold button. */
+  fold: Fold | null;
+}
+
+interface Fold {
+  key: string;
+  open: boolean;
+}
+
+const TOP: Nest = { nested: false, last: false, fold: null };
+
+const nestClass = (n: Nest): string =>
+  n.nested ? ` card--nested${n.last ? " card--nested-last" : ""}` : "";
+
+/** Waiting or in error: shown even when its family is folded. */
+const needsYou = (s: SessionView): boolean => s.state === "waiting" || s.state === "error";
+
+function fillCard(entry: CardEntry, s: SessionView, nest: Nest): void {
   const actionable = entry.hit !== null;
   fillEntry(entry, {
-    className: `card card--${s.state} ${actionable ? "card--action" : "card--static"}`,
+    className: `card card--${s.state} ${actionable ? "card--action" : "card--static"}${nestClass(nest)}`,
     name: actionable ? cardName(s) : "",
     description: actionable ? cardDescription(s) : "",
     tooltip: cardTooltip(s),
-    sections: cardSections(s),
+    sections: cardSections(s, nest.fold),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Folded families: the roots whose nested cards are hidden, kept in this
+// window's storage (a convenience: lost storage only unfolds them)
+// ---------------------------------------------------------------------------
+
+const FOLDED_STORE = "monitor.foldedFamilies";
+/** Oldest folds are forgotten past this many. */
+const FOLDED_MAX = 50;
+
+const collapsedFamilies: string[] = loadFolded();
+
+function loadFolded(): string[] {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(FOLDED_STORE) ?? "[]");
+    return Array.isArray(raw) ? raw.filter((k): k is string => typeof k === "string").slice(-FOLDED_MAX) : [];
+  } catch {
+    return [];
+  }
+}
+
+function toggleFamily(key: string): void {
+  const at = collapsedFamilies.indexOf(key);
+  if (at >= 0) collapsedFamilies.splice(at, 1);
+  else collapsedFamilies.push(key);
+  collapsedFamilies.splice(0, Math.max(collapsedFamilies.length - FOLDED_MAX, 0));
+  try {
+    localStorage.setItem(FOLDED_STORE, JSON.stringify(collapsedFamilies));
+  } catch {
+    // Not kept: the fold lasts until the window reloads.
+  }
+  scheduleRender();
+}
+
+/** Card key of a folded family's summary: never a session or task key. */
+const foldKey = (rootKey: string): string => `fold:${rootKey}`;
+
+/** The row standing for a folded family's hidden cards: a click unfolds it. */
+function createFoldCard(rootKey: string): CardEntry {
+  const el = h("div", "card");
+  el.setAttribute("role", "listitem");
+  el.dataset.key = foldKey(rootKey);
+  const hit = h("button", "card-hit");
+  hit.type = "button";
+  hit.setAttribute("aria-expanded", "false");
+  const desc = h("span");
+  desc.id = `card-desc-${++descSeq}`;
+  desc.hidden = true;
+  hit.setAttribute("aria-describedby", desc.id);
+  el.append(hit, desc);
+  el.addEventListener("click", () => toggleFamily(rootKey));
+  return { el, hit, desc, sig: "", parts: new Map() };
+}
+
+/** "2 sessions imbriquées · 1 en cours · 1 tâche proposée". */
+function foldSummary(hidden: readonly Member[]): string {
+  const sessions = hidden.flatMap((m) => (m.kind === "session" ? [m.s] : []));
+  const tasks = hidden.length - sessions.length;
+  const unseen = sessions.filter((s) => s.state === "unseen").length;
+  const working = sessions.filter((s) => s.state === "working").length;
+  const parts: string[] = [];
+  if (sessions.length) {
+    parts.push(`${sessions.length} ${plural(sessions.length, "session imbriquée", "sessions imbriquées")}`);
+  }
+  if (unseen) parts.push(`${unseen} ${plural(unseen, "non vue", "non vues")}`);
+  if (working) parts.push(`${working} en cours`);
+  if (tasks) parts.push(tasksText(tasks));
+  return parts.join(" · ");
+}
+
+function fillFoldCard(entry: CardEntry, hidden: readonly Member[]): void {
+  const summary = foldSummary(hidden);
+  const titles = hidden.map((m) => (m.kind === "session" ? m.s.title : `Tâche proposée : ${m.t.title}`));
+  fillEntry(entry, {
+    className: "card card--fold card--action card--nested card--nested-last",
+    name: `Afficher ${summary.split(" · ").join(", ")}`,
+    description: titles.join(". "),
+    tooltip: [...titles, "Clic : afficher les sessions imbriquées"].join("\n"),
+    sections: [section("head", { summary }, buildFoldHead)],
+  });
+}
+
+function buildFoldHead(m: { summary: string }): HTMLElement {
+  const head = h("div", "card-head");
+  const mark = h("span", "fold-mark");
+  mark.append(icon("chevron"));
+  head.append(mark, h("span", "card-title", m.summary));
+  return head;
 }
 
 /** What a card shows and says: its look, its button's name and description, its tooltip and rows. */
@@ -1441,7 +1660,7 @@ function createTaskCard(t: ProposedTask): CardEntry {
   return { el, hit, desc, sig: "", parts: new Map() };
 }
 
-function fillTaskCard(entry: CardEntry, t: ProposedTask): void {
+function fillTaskCard(entry: CardEntry, t: ProposedTask, nest: Nest): void {
   const lines = [`Tâche proposée : ${t.title}`];
   if (t.tldr) lines.push(clip(t.tldr, 300));
   lines.push(`Proposée par ${t.sessionTitle}, ${formatClock(t.createdAt)}`);
@@ -1453,7 +1672,7 @@ function fillTaskCard(entry: CardEntry, t: ProposedTask): void {
   }
   lines.push(TASK_HINT);
   fillEntry(entry, {
-    className: "card card--task card--action",
+    className: `card card--task card--action${nestClass(nest)}`,
     name: `Tâche proposée : ${t.title}, par ${t.sessionTitle}. Ouvrir la session dans Claude Desktop`,
     description: t.tldr ?? "",
     tooltip: lines.join("\n"),
@@ -1505,8 +1724,8 @@ function section<M>(id: string, model: M, build: (m: M) => HTMLElement): Section
 }
 
 /** Line 1 (state, title, time) and, when it answers "does it need me / where is it", line 2. */
-function cardSections(s: SessionView): Section[] {
-  const out: Section[] = [section("head", headModel(s), buildHead)];
+function cardSections(s: SessionView, fold: Fold | null): Section[] {
+  const out: Section[] = [section("head", headModel(s, fold), buildHead)];
   const line = lineModel(s);
   if (line) out.push(section("line", line, buildLine));
   return out;
@@ -1633,9 +1852,10 @@ interface HeadModel {
   onScreen: boolean;
   cli: boolean;
   pr: PrModel | null;
+  fold: Fold | null;
 }
 
-const headModel = (s: SessionView): HeadModel => {
+const headModel = (s: SessionView, fold: Fold | null): HeadModel => {
   const pr = prModel(s);
   return {
     state: s.state,
@@ -1644,11 +1864,12 @@ const headModel = (s: SessionView): HeadModel => {
     onScreen: s.onScreen,
     cli: !s.isDesktop,
     pr: pr && isOpen(pr) ? pr : null,
+    fold,
   };
 };
 
 function buildHead(m: HeadModel): HTMLElement {
-  const head = h("div", "card-head");
+  const head = h("div", m.fold ? "card-head card-head--fold" : "card-head");
   const dot = h("span", `dot dot--${m.state}`);
   head.append(dot, h("span", "card-title", m.title));
   if (m.onScreen) {
@@ -1662,6 +1883,7 @@ function buildHead(m: HeadModel): HTMLElement {
     tag.title = CLI_TOOLTIP;
     head.append(tag);
   }
+  if (m.fold) head.append(foldButton(m.fold));
   if (m.pr) head.append(prChip(m.pr, m.state));
   const label = STATE_SHORT[m.state];
   if (label || m.since !== null) {
@@ -1674,6 +1896,25 @@ function buildHead(m: HeadModel): HTMLElement {
     head.append(status);
   }
   return head;
+}
+
+/** After the title, as in Desktop's sidebar: folds or unfolds what hangs from the session. */
+function foldButton(f: Fold): HTMLElement {
+  const button = h("button", "card-fold");
+  button.type = "button";
+  button.dataset.focus = "fold";
+  const label = f.open ? "Replier les sessions imbriquées" : "Déplier les sessions imbriquées";
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.setAttribute("aria-expanded", String(f.open));
+  button.append(icon("chevron"));
+  const key = f.key;
+  button.addEventListener("click", (e) => {
+    // The card behind opens the session.
+    e.stopPropagation();
+    toggleFamily(key);
+  });
+  return button;
 }
 
 // Line 2: the question or reason, the error, the plan, or a finished review's findings.

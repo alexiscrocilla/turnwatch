@@ -70,6 +70,8 @@ struct RawSession {
     pr_state: Option<Value>,
     prs: Option<Value>,
     spawned_from: Option<Value>,
+    forked_from_session_id: Option<Value>,
+    lineage_detached: Option<Value>,
     peer_receipts: Option<Value>,
     queued_side_session_notes: Option<Value>,
     context_exceeded_count: Option<Value>,
@@ -120,6 +122,9 @@ impl RawSession {
                     title: text(v.get("title")),
                 })
             }),
+            side_session: self.side_session(),
+            forked_from: string(self.forked_from_session_id.as_ref()),
+            lineage_detached: flag(self.lineage_detached.as_ref()),
             peer_receipts: peer_receipts(self.peer_receipts.as_ref()),
             queued_notes: side_notes(self.queued_side_session_notes.as_ref()),
             context_exceeded_count: count(self.context_exceeded_count.as_ref()),
@@ -134,6 +139,25 @@ impl RawSession {
             suggestions: suggestions(self.background_task_suggestions.as_ref()),
             auto_fix_prs: self.prs.as_ref().map(auto_fix_prs).unwrap_or_default(),
         })
+    }
+
+    /// Desktop's side-session link: `spawnedFrom.sideSession` without
+    /// `userFork`, unless `forkedFromSessionId` names another session than
+    /// the spawner (or than the parent it stood in for, deleted since): the
+    /// fork wins then, as when a side session is forked.
+    fn side_session(&self) -> bool {
+        let Some(from) = self.spawned_from.as_ref() else {
+            return false;
+        };
+        if !flag(from.get("sideSession")) || flag(from.get("userFork")) {
+            return false;
+        }
+        let Some(fork) = string(self.forked_from_session_id.as_ref()) else {
+            return true;
+        };
+        let same = |id: Option<String>| id.is_some_and(|id| id.trim() == fork.trim());
+        same(string(from.get("sessionId")))
+            || same(from.get("deletedParent").and_then(|d| string(d.get("sessionId"))))
     }
 
     /// Desktop's `DS()`: `postTurnSummary` merged with `turnWrapUp`. A
@@ -732,6 +756,10 @@ mod tests {
                 title: Some("Release checklist".into()),
             })
         );
+        // Forked from another session than its spawner: a fork, not a side session.
+        assert!(!s.side_session);
+        assert_eq!(s.forked_from.as_deref(), Some("local_44444444-3333-4222-8111-000000000000"));
+        assert!(s.lineage_detached);
         assert_eq!(s.peer_receipts.len(), 2, "the malformed receipt is skipped");
         assert_eq!(
             s.peer_receipts[0],
@@ -950,6 +978,9 @@ mod tests {
         assert_eq!(s.last_turn_report, None, "blank text is dropped");
         assert_eq!(s.pr, None);
         assert_eq!(s.spawned_from, None);
+        assert!(!s.side_session);
+        assert_eq!(s.forked_from, None);
+        assert!(!s.lineage_detached);
         assert!(s.peer_receipts.is_empty());
         assert!(s.queued_notes.is_empty());
         assert_eq!(s.turn_summary, None);
@@ -1024,6 +1055,32 @@ mod tests {
         );
         let none = parse_session(r#"{"sessionId":"local_s","backgroundTaskSuggestions":{}}"#);
         assert!(none.expect("parses").suggestions.is_empty());
+    }
+
+    #[test]
+    fn side_session_follows_desktops_lineage_rule() {
+        let side = |extra: &str| {
+            let json = format!(
+                r#"{{"sessionId":"local_s","spawnedFrom":{{"sessionId":"local_p","sideSession":true{extra}}}}}"#
+            );
+            parse_session(&json).expect("parses").side_session
+        };
+        assert!(side(""));
+        assert!(!side(r#","userFork":true"#), "a /btw side chat is a fork");
+        let forked = |fork: &str, extra: &str| {
+            let json = format!(
+                r#"{{"sessionId":"local_s","forkedFromSessionId":"{fork}","spawnedFrom":{{"sessionId":"local_p","sideSession":true{extra}}}}}"#
+            );
+            parse_session(&json).expect("parses").side_session
+        };
+        assert!(forked("local_p", ""), "forked from its own spawner");
+        assert!(!forked("local_other", ""), "a forked side session hangs from its fork source");
+        assert!(
+            forked("local_gone", r#","deletedParent":{"sessionId":"local_gone"}"#),
+            "the spawner stands in for a deleted parent"
+        );
+        let plain = parse_session(r#"{"sessionId":"local_s","spawnedFrom":{"sessionId":"local_p"}}"#);
+        assert!(!plain.expect("parses").side_session, "started from a New task card");
     }
 
     #[test]

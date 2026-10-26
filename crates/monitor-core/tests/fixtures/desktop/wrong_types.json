@@ -20,6 +20,8 @@
   "prUrl": 12,
   "prs": { "prNumber": 3 },
   "spawnedFrom": "local_parent",
+  "forkedFromSessionId": 7,
+  "lineageDetached": "yes",
   "peerReceipts": { "messageId": "m" },
   "priorErrorMark": "boom",
   "queryCrashes": "boom"

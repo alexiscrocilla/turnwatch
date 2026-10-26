@@ -578,6 +578,9 @@ button {
 /* ------------------------------------------------------------------ */
 
 .card {
+  /* Middle of line 1, from the top of the padding box: where a nested
+     card's line meets it. */
+  --head-mid: 22px;
   position: relative;
   isolation: isolate;
   display: flex;
@@ -591,6 +594,122 @@ button {
 
 .card + .card {
   margin-top: 6px;
+}
+
+/* Nested under the session it comes from, as in Desktop's sidebar: one level,
+   joined by a line that drops from under the root's dot (18 px from the
+   list's edge: 1 px border, 12 px padding, half the dot) and turns into each
+   card. The line runs outside the card, across the gap above it. */
+.card--nested {
+  margin-left: 28px;
+}
+
+.card--nested::before,
+.card--nested::after {
+  content: "";
+  position: absolute;
+  /* 28 px of indent and 1 px of border back to the dot's axis. */
+  left: -11px;
+  width: 10px;
+  pointer-events: none;
+  border: 0 solid var(--border-strong);
+}
+
+/* Down the whole card, from the card above. */
+.card--nested::before {
+  top: -8px;
+  bottom: -1px;
+  border-left-width: 1px;
+}
+
+/* The branch to this card. */
+.card--nested::after {
+  top: var(--head-mid);
+  border-top-width: 1px;
+}
+
+/* The last one: the line bends into it and stops, on the branches' row. */
+.card--nested-last::before {
+  bottom: auto;
+  height: calc(9px + var(--head-mid));
+  border-bottom-width: 1px;
+  border-bottom-left-radius: 6px;
+}
+
+.card--nested-last::after {
+  content: none;
+}
+
+/* Fold button, right after the title (and its eye or CLI tag), as in
+   Desktop's sidebar: the title gives up only the room it does not use. */
+.card-head--fold .card-title {
+  flex: 0 1 auto;
+}
+
+.card-fold {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Line 1's height: a 24 px target that does not grow the row. */
+  width: 24px;
+  height: 24px;
+  margin: 0 auto 0 -7px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+}
+
+.card-fold:hover {
+  color: var(--text);
+  background: var(--card-press);
+}
+
+.card-fold .icon {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.75;
+}
+
+.card-fold[aria-expanded="true"] .icon {
+  transform: rotate(90deg);
+}
+
+/* What a folded family hides, in one quiet line: a click shows it. */
+.card--fold {
+  --head-mid: 17px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.card--fold .card-head {
+  min-height: 24px;
+}
+
+.card--fold .card-title {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+/* In the dot's place, like the task mark. */
+.fold-mark {
+  flex: 0 0 10px;
+  min-width: 0;
+  display: inline-flex;
+  justify-content: center;
+  color: var(--text-faint);
+}
+
+.fold-mark .icon {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.75;
 }
 
 /* Only cards that open something react to the pointer. */
@@ -625,6 +744,7 @@ button {
 
 /* Idle: one quiet line, no card surface. */
 .card--idle {
+  --head-mid: 19px;
   padding-top: 7px;
   padding-bottom: 7px;
   background: transparent;
@@ -1046,6 +1166,25 @@ button {
   .card--error {
     border-width: 2px;
     padding: 9px 11px;
+  }
+
+  /* The thicker border moves the padding box: the line keeps its place. */
+  .card--nested.card--waiting,
+  .card--nested.card--error {
+    --head-mid: 21px;
+  }
+
+  .card--nested.card--waiting::before,
+  .card--nested.card--waiting::after,
+  .card--nested.card--error::before,
+  .card--nested.card--error::after {
+    left: -12px;
+  }
+
+  /* Down to the outer edge, where the next card's line starts. */
+  .card--nested.card--waiting::before,
+  .card--nested.card--error::before {
+    bottom: -2px;
   }
 
   .plan-track {

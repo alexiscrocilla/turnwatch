@@ -50,10 +50,12 @@ const K = {
   alias: "local_mock-0012-alias",
   offer: "local_mock-0013-offer",
   planned: "local_mock-0014-planned",
+  contrast: "local_mock-0015-contrast",
 } as const;
 
 const TITLE_SETTINGS = "Refonte de la page Paramètres";
 const TITLE_SEARCH = "Pagination des résultats de recherche";
+const TITLE_DATES = "Dates relatives figées dans la liste";
 
 const AUTH_PLAN = [
   "Ajouter le fournisseur OAuth",
@@ -160,7 +162,7 @@ const notReadySnapshot = (): Snapshot => ({
   proposedTasks: [],
 });
 
-/** "New task" cards: one next to its session's project, one alone in its project. */
+/** "New task" cards: two under the sessions that proposed them, one alone in its project. */
 const mockTasks = (): ProposedTask[] => [
   {
     id: "task_0a1b2c3d",
@@ -170,8 +172,19 @@ const mockTasks = (): ProposedTask[] => [
     expiresAt: Date.now() + 6 * 24 * HOUR_MS,
     listedUntil: Date.now() + 6 * 24 * HOUR_MS,
     sessionKey: K.dates,
-    sessionTitle: "Dates relatives figées dans la liste",
+    sessionTitle: TITLE_DATES,
     project: "carnet",
+  },
+  {
+    id: "task_8c9d0e1f",
+    title: "Parcourir la page Paramètres au clavier",
+    tldr: "Les nouvelles sections n'ont pas été vérifiées à la tabulation.",
+    createdAt: ago(8 * 60),
+    expiresAt: Date.now() + 7 * 24 * HOUR_MS,
+    listedUntil: Date.now() + 7 * 24 * HOUR_MS,
+    sessionKey: K.settings,
+    sessionTitle: TITLE_SETTINGS,
+    project: "atlas-web",
   },
   {
     id: "task_4e5f6a7b",
@@ -299,6 +312,7 @@ function session(seed: Seed): SessionView {
     pr: null,
     messages: noMessages(),
     parent: null,
+    nestUnder: null,
     contextExceededCount: null,
     lastError: null,
     version: "2.1.308",
@@ -395,7 +409,7 @@ function initialSessions(): SessionView[] {
     }),
     session({
       key: K.dates,
-      title: "Dates relatives figées dans la liste",
+      title: TITLE_DATES,
       project: "carnet",
       state: "unseen",
       stateSince: ago(4 * 60),
@@ -434,23 +448,36 @@ function initialSessions(): SessionView[] {
       git: git("atlas-web", "feat/settings-page", 6),
       messages: { ...noMessages(), awaitingReply: [link(K.search, TITLE_SEARCH, 5 * 60, true)] },
     }),
+    // Side sessions started by the Paramètres session: nested under it.
     session({
       key: K.search,
       title: TITLE_SEARCH,
-      project: "atlas-api",
-      cwd: "D:\\Développement\\atlas-api\\.claude\\worktrees\\eager-lovelace-7f3a",
+      project: "atlas-web",
+      cwd: "D:\\Développement\\atlas-web\\.claude\\worktrees\\eager-lovelace-7f3a",
       worktree: "eager-lovelace-7f3a",
       state: "working",
       stateSince: ago(3 * 60),
       activity: act("Grep", '"<Pagination" src/ --type ts', 1),
-      git: git("atlas-api", "claude/search-pagination", 0),
-      pr: pr("exemple/atlas-api", 128, "Pagination des résultats de recherche", {
+      git: git("atlas-web", "claude/search-pagination", 0),
+      pr: pr("exemple/atlas-web", 128, "Pagination des résultats de recherche", {
         checks: "pending",
         reviewDecision: "REVIEW_REQUIRED",
         mergeState: "BLOCKED",
       }),
       parent: { hostSessionId: K.settings, title: TITLE_SETTINGS },
+      nestUnder: K.settings,
       messages: { ...noMessages(), unreadInbound: [link(K.settings, TITLE_SETTINGS, 5 * 60, true)] },
+    }),
+    session({
+      key: K.contrast,
+      title: "Contraste du thème sombre",
+      project: "atlas-web",
+      state: "idle",
+      stateSince: ago(50 * 60),
+      recap: "Contrastes relevés à 4,5:1 sur les boutons secondaires ; rien d'autre à corriger.",
+      git: git("atlas-web", "feat/settings-page", 0),
+      parent: { hostSessionId: K.settings, title: TITLE_SETTINGS },
+      nestUnder: K.settings,
     }),
     session({
       key: K.deps,

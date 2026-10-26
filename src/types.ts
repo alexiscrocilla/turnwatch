@@ -129,7 +129,12 @@ export interface SessionView {
   git: GitInfo | null;
   pr: PrInfo | null;
   messages: MessageSummary;
+  /** The session this one comes from in Desktop: started as a side session,
+   * forked, or started from one of its "New task" cards. */
   parent: SessionRef | null;
+  /** Key of the listed session this one shows under, as Desktop's sidebar
+   * nests it: its nearest ancestor in this snapshot. Null at top level. */
+  nestUnder: string | null;
   contextExceededCount: number | null;
   lastError: string | null;
   version: string | null;

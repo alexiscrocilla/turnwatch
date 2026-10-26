@@ -111,6 +111,7 @@ pub fn build_snapshot(input: &AggregateInput) -> Snapshot {
         .filter_map(|(key, entry)| build_view(input, key, entry, true, cutoff, &titles, &inbound))
         .filter(|view| needs_person(view.state));
     let mut sessions: Vec<SessionView> = live_views.chain(stopped_views).collect();
+    nest_families(&mut sessions, input.desktop);
     sort_sessions(&mut sessions);
     let counts = count_sessions(&sessions);
     let proposed_tasks = proposed_tasks(input, &sessions);
@@ -896,6 +897,8 @@ fn build_view(
             unread_inbound,
         },
         parent: desktop.and_then(|d| parent_ref(d, titles)),
+        // Known once every session is listed: nest_families.
+        nest_under: None,
         context_exceeded_count: desktop.and_then(|d| d.context_exceeded_count),
         last_error: derived.error,
         version: clean(entry.version.as_deref()),
@@ -976,16 +979,71 @@ fn activity(state: SessionState, transcript: &TranscriptInfo) -> Option<ToolActi
     tool.cloned()
 }
 
-/// The session this one was spawned from, titled from the parent's own
-/// Desktop file or live process. `spawnedFrom.title` is not used: Desktop
-/// stores there the title given to the new session, not the parent's.
+/// The session this one comes from ([`lineage_parent`]), titled from the
+/// parent's own Desktop file or live process. `spawnedFrom.title` is not
+/// used: Desktop stores there the title given to the new session, not the
+/// parent's.
 fn parent_ref(desktop: &DesktopSession, titles: &PeerTitles) -> Option<SessionRef> {
-    let parent = desktop.spawned_from.as_ref()?;
-    let id = non_blank(Some(parent.host_session_id.as_str()))?;
+    let id = lineage_parent(desktop)?;
     Some(SessionRef {
         host_session_id: id.to_owned(),
         title: titles.get(id),
     })
+}
+
+/// The session this one hangs from in Desktop's sidebar, as Desktop works
+/// it out: none once the person detached it; else the session that started
+/// it as a side session; else the session it was forked from; else the
+/// session whose "New task" card started it. A link to itself is ignored.
+fn lineage_parent(desktop: &DesktopSession) -> Option<&str> {
+    if desktop.lineage_detached {
+        return None;
+    }
+    let own = desktop.host_session_id.trim();
+    let spawner = desktop
+        .spawned_from
+        .as_ref()
+        .and_then(|s| non_blank(Some(s.host_session_id.as_str())))
+        .filter(|id| *id != own);
+    let fork = non_blank(desktop.forked_from.as_deref()).filter(|id| *id != own);
+    if desktop.side_session && spawner.is_some() {
+        return spawner;
+    }
+    fork.or(spawner)
+}
+
+/// Sets each session's `nest_under`: its nearest ancestor listed with it,
+/// up Desktop's lineage. Desktop puts a whole lineage in one family and,
+/// as it is set up, links every session past its archived ancestors: the
+/// walk goes past any ancestor that is not listed (archived, or stopped
+/// while idle).
+fn nest_families(sessions: &mut [SessionView], desktop: &HashMap<String, DesktopSession>) {
+    let listed: HashSet<String> = sessions.iter().map(|s| s.key.clone()).collect();
+    for view in sessions.iter_mut() {
+        view.nest_under = view
+            .host_session_id
+            .as_deref()
+            .and_then(|id| listed_ancestor(id, desktop, &listed));
+    }
+}
+
+fn listed_ancestor(
+    id: &str,
+    desktop: &HashMap<String, DesktopSession>,
+    listed: &HashSet<String>,
+) -> Option<String> {
+    let mut seen = HashSet::from([id.trim()]);
+    let mut current = desktop.get(id)?;
+    loop {
+        let parent = lineage_parent(current)?;
+        if !seen.insert(parent) {
+            return None;
+        }
+        if listed.contains(parent) {
+            return Some(parent.to_owned());
+        }
+        current = desktop.get(parent)?;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3314,6 +3372,116 @@ mod tests {
             Some("Session 6")
         );
         assert_eq!(parent("local_live"), None);
+    }
+
+    #[test]
+    fn sessions_nest_under_their_nearest_listed_ancestor() {
+        let side = |host: &str, parent: &str| DesktopSession {
+            spawned_from: Some(SessionRef {
+                host_session_id: parent.to_owned(),
+                title: None,
+            }),
+            side_session: true,
+            ..desk(host)
+        };
+        // Started from a "New task" card: no side session.
+        let task = |host: &str, parent: &str| DesktopSession {
+            side_session: false,
+            ..side(host, parent)
+        };
+        let archived = |d: DesktopSession| DesktopSession {
+            is_archived: true,
+            ..d
+        };
+        let mut f = Fixture::new();
+        f.live(entry(1, "local_root"))
+            .file(desk("local_root"))
+            .live(entry(2, "local_child"))
+            .file(side("local_child", "local_root"))
+            // Not listed (stopped while idle): its child still joins the root.
+            .file(side("local_idle", "local_root"))
+            .live(entry(3, "local_grandchild"))
+            .file(side("local_grandchild", "local_idle"))
+            // An archived parent: every kind of link reaches past it.
+            .file(archived(task("local_gone", "local_root")))
+            .live(entry(4, "local_side_past"))
+            .file(side("local_side_past", "local_gone"))
+            .live(entry(5, "local_task_past"))
+            .file(task("local_task_past", "local_gone"))
+            // A fork hangs from the session it was forked from.
+            .live(entry(6, "local_fork"))
+            .file(DesktopSession {
+                forked_from: Some("local_child".to_owned()),
+                ..task("local_fork", "local_unknown")
+            })
+            // Detached by the person in Desktop.
+            .live(entry(7, "local_detached"))
+            .file(DesktopSession {
+                lineage_detached: true,
+                ..side("local_detached", "local_root")
+            })
+            // A loop through sessions that are not listed.
+            .file(side("local_loop_a", "local_looped"))
+            .live(entry(8, "local_looped"))
+            .file(side("local_looped", "local_loop_a"))
+            // Its ancestors are unknown.
+            .live(entry(9, "local_orphan"))
+            .file(side("local_orphan", "local_missing"))
+            // A link to itself is ignored: the other one counts.
+            .live(entry(10, "local_self"))
+            .file(DesktopSession {
+                forked_from: Some("local_root".to_owned()),
+                ..side("local_self", "local_self")
+            });
+
+        let nest = |key: &str| f.view(key).nest_under;
+        assert_eq!(nest("local_root"), None);
+        assert_eq!(nest("local_child").as_deref(), Some("local_root"));
+        assert_eq!(nest("local_grandchild").as_deref(), Some("local_root"));
+        assert_eq!(
+            f.view("local_grandchild").parent.map(|p| p.host_session_id).as_deref(),
+            Some("local_idle"),
+            "the parent stays the direct one"
+        );
+        assert_eq!(nest("local_side_past").as_deref(), Some("local_root"));
+        assert_eq!(nest("local_task_past").as_deref(), Some("local_root"));
+        assert_eq!(nest("local_self").as_deref(), Some("local_root"));
+        assert_eq!(
+            f.view("local_self").parent.map(|p| p.host_session_id).as_deref(),
+            Some("local_root")
+        );
+        assert_eq!(nest("local_fork").as_deref(), Some("local_child"));
+        assert_eq!(
+            f.view("local_fork").parent.map(|p| p.host_session_id).as_deref(),
+            Some("local_child")
+        );
+        assert_eq!(nest("local_detached"), None);
+        assert_eq!(f.view("local_detached").parent, None);
+        assert_eq!(nest("local_looped"), None);
+        assert_eq!(nest("local_orphan"), None);
+        assert_eq!(f.view("local_orphan").parent.map(|p| p.host_session_id).as_deref(), Some("local_missing"));
+    }
+
+    #[test]
+    fn a_forked_side_chat_hangs_from_its_fork_source() {
+        // A `/btw` side chat, or a fork of a side session: not a side session
+        // (desktop.rs), so the fork source wins over the spawner.
+        let mut f = Fixture::new();
+        f.live(entry(1, "local_a"))
+            .file(desk("local_a"))
+            .live(entry(2, "local_b"))
+            .file(desk("local_b"))
+            .live(entry(3, "local_btw"))
+            .file(DesktopSession {
+                spawned_from: Some(SessionRef {
+                    host_session_id: "local_a".to_owned(),
+                    title: None,
+                }),
+                side_session: false,
+                forked_from: Some("local_b".to_owned()),
+                ..desk("local_btw")
+            });
+        assert_eq!(f.view("local_btw").nest_under.as_deref(), Some("local_b"));
     }
 
     #[test]

@@ -80,6 +80,14 @@ pub struct DesktopSession {
     /// `spawnedFrom`: the session that started this one. Its `title` is the
     /// title Desktop gave this new session, not the parent's title.
     pub spawned_from: Option<SessionRef>,
+    /// A side session another session started: `spawnedFrom.sideSession`
+    /// without `spawnedFrom.userFork`, unless `forkedFromSessionId` names
+    /// another session (then it is a fork of that one).
+    pub side_session: bool,
+    /// `forkedFromSessionId`: the session this one was forked from.
+    pub forked_from: Option<String>,
+    /// `lineageDetached`: the person detached it from its parent in Desktop.
+    pub lineage_detached: bool,
     /// Messages this session sent to other sessions.
     pub peer_receipts: Vec<PeerReceipt>,
     /// `queuedSideSessionNotes`: turn reports of other sessions waiting to be
@@ -541,7 +549,12 @@ pub struct SessionView {
     pub git: Option<GitInfo>,
     pub pr: Option<PrInfo>,
     pub messages: MessageSummary,
+    /// The session this one comes from in Desktop: started as a side
+    /// session, forked, or started from one of its "New task" cards.
     pub parent: Option<SessionRef>,
+    /// Key of the listed session this one shows under, as Desktop's sidebar
+    /// nests it: its nearest ancestor in this snapshot. None at top level.
+    pub nest_under: Option<String>,
     pub context_exceeded_count: Option<u32>,
     pub last_error: Option<String>,
     pub version: Option<String>,

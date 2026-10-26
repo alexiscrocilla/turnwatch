@@ -50,6 +50,8 @@
     "sharedFolder": false,
     "name": "upload-fix"
   },
+  "forkedFromSessionId": "local_44444444-3333-4222-8111-000000000000",
+  "lineageDetached": true,
   "peerMessaged": true,
   "peerReceipts": [
     {
