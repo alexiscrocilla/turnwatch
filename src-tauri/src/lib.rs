@@ -451,7 +451,8 @@ fn show_toasts(app: &AppHandle, selected: Vec<toasts::Toast>) {
 }
 
 /// Every [`TOAST_TICK`], announces the held-back waits and errors that have
-/// lasted long enough unanswered (see `toasts`). Runs for the life of the app.
+/// lasted long enough unanswered (see `toasts`), and a stop of Desktop's
+/// quota samples. Runs for the life of the app.
 fn start_toast_ticker(
     app: AppHandle,
     engine: Engine,
@@ -465,12 +466,38 @@ fn start_toast_ticker(
                 std::thread::sleep(TOAST_TICK);
                 let snapshot = engine.snapshot();
                 let current = lock(&settings).clone();
-                let due = lock(&notifier).tick(&snapshot, &current, now_ms());
+                let now = now_ms();
+                let mut due = lock(&notifier).tick(&snapshot, &current, now);
+                due.extend(lock(&notifier).quota_stop(&snapshot, &current, now, user_idle_ms()));
                 show_toasts(&app, due);
             }
         });
     // Without it, held-back waits are still checked with each new snapshot.
     drop(spawned);
+}
+
+/// Time since the last keyboard or mouse input in this Windows session.
+#[cfg(windows)]
+fn user_idle_ms() -> Option<i64> {
+    use windows_sys::Win32::System::SystemInformation::GetTickCount;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+
+    let mut info = LASTINPUTINFO {
+        cbSize: size_of::<LASTINPUTINFO>() as u32,
+        dwTime: 0,
+    };
+    // SAFETY: `info` is a valid LASTINPUTINFO with its size set.
+    if unsafe { GetLastInputInfo(&mut info) } == 0 {
+        return None;
+    }
+    // Both are tick counts that wrap after 49.7 days.
+    // SAFETY: no arguments.
+    Some(i64::from(unsafe { GetTickCount() }.wrapping_sub(info.dwTime)))
+}
+
+#[cfg(not(windows))]
+fn user_idle_ms() -> Option<i64> {
+    None
 }
 
 /// Saves the engine's acks right away.
@@ -838,6 +865,14 @@ mod tests {
     use monitor_core::model::SourceHealth;
 
     use super::*;
+
+    #[test]
+    #[cfg(windows)]
+    #[ignore = "needs an interactive Windows session"]
+    fn live_reads_the_idle_time() {
+        let idle = user_idle_ms().expect("idle time");
+        assert!((0..i64::from(u32::MAX)).contains(&idle), "{idle}");
+    }
 
     #[test]
     fn only_https_urls_pass() {

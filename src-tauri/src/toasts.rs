@@ -190,6 +190,18 @@ impl Notifier {
         self.release_deferred(snapshot, settings, now_ms)
     }
 
+    /// The toast when Desktop stopped sampling the quota while sessions
+    /// work (see `QuotaAlerts::check_stop`): call it every few seconds.
+    pub fn quota_stop(
+        &mut self,
+        snapshot: &Snapshot,
+        settings: &Settings,
+        now_ms: i64,
+        idle_ms: Option<i64>,
+    ) -> Option<Toast> {
+        self.quota.check_stop(snapshot, settings, now_ms, idle_ms)
+    }
+
     /// Announces held-back episodes whose session is still in the same
     /// state since the same time, off screen, not a probable question, and
     /// started at least [`REMINDER_DELAY_MS`] ago; several are coalesced

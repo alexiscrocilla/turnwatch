@@ -960,8 +960,12 @@ function renderLive(rows: readonly HealthRow[]): void {
 // Plan quota: one gauge per window under the title bar, a chip when compact
 // ---------------------------------------------------------------------------
 
-/** The latest sample is older than this: shown as out of date. */
-const QUOTA_STALE_MS = 60 * 60_000;
+/** While Desktop samples the quota, it does so every 15 minutes at most: an
+ * older latest sample means it stopped. */
+const QUOTA_STALE_MS = 20 * 60_000;
+/** What Desktop needs to sample again. */
+const QUOTA_RESUME_HINT =
+  "Claude Desktop ne relève le quota qu'à son ouverture et pendant les 5 h qui suivent un clic droit sur son icône, dans la zone de notification. Un clic droit sur cette icône relance le relevé.";
 /** From these percents on, a window turns amber, then red. */
 const QUOTA_WARN = 75;
 const QUOTA_HIGH = 90;
@@ -1102,17 +1106,21 @@ function renderQuota(): void {
   const now = Date.now();
   const models = quotaModels(now);
   const sampledAt = snapshot?.quota?.sampledAt ?? null;
-  const age = models.length && sampledAt !== null && now - sampledAt > QUOTA_STALE_MS ? formatAgo(now - sampledAt) : "";
+  const since = models.length && sampledAt !== null && now - sampledAt > QUOTA_STALE_MS ? formatClock(sampledAt) : "";
 
   ui.quota.hidden = models.length === 0;
-  const sig = JSON.stringify([models, age]);
+  const sig = JSON.stringify([models, since]);
   if (ui.quota.dataset.sig !== sig) {
     ui.quota.dataset.sig = sig;
-    ui.quota.classList.toggle("is-stale", age !== "");
-    const nodes = models.map(buildMeter);
-    if (age) {
-      const stale = dragHandle(h("span", "quota-age", `il y a ${age}`));
-      stale.title = "Claude Desktop n'a pas relevé le quota depuis : il le fait quand il est ouvert";
+    ui.quota.classList.toggle("is-stale", since !== "");
+    const meters = dragHandle(h("div", "quota-meters"));
+    meters.append(...models.map(buildMeter));
+    const nodes: HTMLElement[] = [meters];
+    if (since) {
+      const stale = dragHandle(
+        h("span", "quota-stale", `Pas de relevé depuis ${since} : clic droit sur l'icône de Claude Desktop pour le relancer`),
+      );
+      stale.title = QUOTA_RESUME_HINT;
       nodes.push(stale);
     }
     ui.quota.replaceChildren(...nodes);

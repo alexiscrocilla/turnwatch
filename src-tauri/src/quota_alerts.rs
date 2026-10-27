@@ -13,8 +13,13 @@
 //! both 5-hour thresholds, only the higher is announced. With the setting
 //! off, the thresholds still follow the usage, so turning it on announces
 //! nothing already reached.
+//!
+//! Another toast says when Desktop stopped sampling the quota while
+//! sessions work: it only samples for a few hours after a right-click on
+//! its tray icon, and the gauges then stop moving and the thresholds stop
+//! firing.
 
-use monitor_core::model::{Quota, QuotaWindow, Settings};
+use monitor_core::model::{Quota, QuotaWindow, Settings, Snapshot};
 
 use crate::toasts::{MONITOR_PREFIX, Toast};
 
@@ -31,6 +36,12 @@ const THRESHOLDS: [(Window, u8); 3] = [
     (Window::SevenDay, 90),
 ];
 
+/// While Desktop samples the quota, it does so every 15 minutes at most:
+/// this long without a sample, the person at the computer, means it stopped.
+const STOPPED_AFTER_MS: i64 = 20 * 60_000;
+/// Desktop skips its samples while the computer is locked or idle this long.
+const DESKTOP_IDLE_MS: i64 = 10 * 60_000;
+
 #[derive(Debug, Default)]
 pub struct QuotaAlerts {
     /// Per threshold, in [`THRESHOLDS`] order: true while it may fire; None
@@ -38,6 +49,12 @@ pub struct QuotaAlerts {
     armed: [Option<bool>; THRESHOLDS.len()],
     /// Per window: the latest possible end of the window last seen.
     ends_by: [Option<i64>; 2],
+    /// Since when the person has been using the computer without a pause
+    /// long enough for Desktop to skip its samples; None while idle.
+    active_since: Option<i64>,
+    /// The latest sample whose stop was announced (or passed over with the
+    /// setting off).
+    stop_announced: Option<i64>,
 }
 
 impl QuotaAlerts {
@@ -89,6 +106,44 @@ impl QuotaAlerts {
             .into_iter()
             .map(|(window, _, usage)| toast(window, usage, now_ms))
             .collect()
+    }
+
+    /// The toast when Desktop stopped sampling the quota while a session
+    /// works: no sample for [`STOPPED_AFTER_MS`] of the person's activity
+    /// (an idle pause, when Desktop skips its samples, starts the count
+    /// over). Once per latest sample: a new sample rearms it. `idle_ms`:
+    /// time since the person's last input, None when unknown. Call it every
+    /// few seconds, the time alone makes it due.
+    pub fn check_stop(
+        &mut self,
+        snapshot: &Snapshot,
+        settings: &Settings,
+        now_ms: i64,
+        idle_ms: Option<i64>,
+    ) -> Option<Toast> {
+        let idle = idle_ms.unwrap_or(0).max(0);
+        if idle >= DESKTOP_IDLE_MS {
+            self.active_since = None;
+        } else if self.active_since.is_none() {
+            self.active_since = Some(now_ms - idle);
+        }
+        let sampled_at = snapshot.quota.as_ref()?.sampled_at;
+        let silent_since = sampled_at.max(self.active_since?);
+        if now_ms - silent_since < STOPPED_AFTER_MS
+            || self.stop_announced == Some(sampled_at)
+            || snapshot.counts.working == 0
+        {
+            return None;
+        }
+        self.stop_announced = Some(sampled_at);
+        settings.notify_on_quota.then(|| Toast {
+            key: format!("{MONITOR_PREFIX}quota-stopped"),
+            title: "Quota : relevé arrêté".to_owned(),
+            body: format!(
+                "Claude Desktop n'a pas relevé le quota depuis {}. Clic droit sur son icône, dans la zone de notification, pour le relancer.",
+                duration(now_ms - sampled_at)
+            ),
+        })
     }
 }
 
@@ -253,6 +308,88 @@ mod tests {
         // Turned on: the threshold already crossed is not announced late.
         assert!(titles(&mut alerts, &quota(86.0, 10.0)).is_empty());
         assert!(alerts.check(None, &Settings::default(), NOW).is_empty());
+    }
+
+    /// A snapshot with `working` sessions at work and a quota sampled at `sampled_at`.
+    fn sampled(sampled_at: i64, working: u32) -> Snapshot {
+        let mut snapshot = Snapshot {
+            ready: true,
+            quota: Some(Quota {
+                sampled_at,
+                ..quota(10.0, 10.0)
+            }),
+            ..Snapshot::default()
+        };
+        snapshot.counts.working = working;
+        snapshot
+    }
+
+    fn stop_at(alerts: &mut QuotaAlerts, snapshot: &Snapshot, at: i64, idle: i64) -> Option<String> {
+        alerts
+            .check_stop(snapshot, &Settings::default(), at, Some(idle))
+            .map(|t| t.body)
+    }
+
+    #[test]
+    fn a_stop_is_announced_once_per_sample() {
+        let mut alerts = QuotaAlerts::default();
+        let snapshot = sampled(NOW, 1);
+        assert_eq!(stop_at(&mut alerts, &snapshot, NOW, 0), None);
+        assert_eq!(stop_at(&mut alerts, &snapshot, NOW + 19 * MIN, 0), None, "Desktop may still sample");
+        let toast = alerts
+            .check_stop(&snapshot, &Settings::default(), NOW + 20 * MIN, Some(0))
+            .expect("toast");
+        assert_eq!(toast.title, "Quota : relevé arrêté");
+        assert_eq!(
+            toast.body,
+            "Claude Desktop n'a pas relevé le quota depuis 20 min. Clic droit sur son icône, dans la zone de notification, pour le relancer."
+        );
+        assert!(crate::toasts::shows_monitor(&toast.key), "a click shows the monitor");
+        assert_eq!(stop_at(&mut alerts, &snapshot, NOW + 3 * 60 * MIN, 0), None, "once");
+        // A new sample, then Desktop stops again.
+        let later = sampled(NOW + 4 * 60 * MIN, 1);
+        assert_eq!(stop_at(&mut alerts, &later, NOW + 4 * 60 * MIN + 10 * MIN, 0), None);
+        assert!(stop_at(&mut alerts, &later, NOW + 4 * 60 * MIN + 25 * MIN, 0).is_some());
+    }
+
+    #[test]
+    fn an_idle_pause_lets_desktop_skip_its_samples() {
+        let mut alerts = QuotaAlerts::default();
+        let snapshot = sampled(NOW, 1);
+        stop_at(&mut alerts, &snapshot, NOW, 0);
+        // Away 12 minutes: Desktop skipped its samples, the count starts over.
+        assert_eq!(stop_at(&mut alerts, &snapshot, NOW + 18 * MIN, 11 * MIN), None);
+        assert_eq!(stop_at(&mut alerts, &snapshot, NOW + 22 * MIN, 30_000), None, "back for 30 s");
+        assert_eq!(stop_at(&mut alerts, &snapshot, NOW + 41 * MIN, 0), None);
+        assert!(stop_at(&mut alerts, &snapshot, NOW + 42 * MIN, 0).is_some());
+    }
+
+    #[test]
+    fn a_stop_waits_for_a_session_at_work() {
+        let mut alerts = QuotaAlerts::default();
+        stop_at(&mut alerts, &sampled(NOW, 0), NOW, 0);
+        assert_eq!(stop_at(&mut alerts, &sampled(NOW, 0), NOW + 2 * 60 * MIN, 0), None);
+        assert!(stop_at(&mut alerts, &sampled(NOW, 2), NOW + 2 * 60 * MIN, 0).is_some());
+        // Unknown idle time: taken as active.
+        let mut alerts = QuotaAlerts::default();
+        let snapshot = sampled(NOW, 1);
+        assert!(alerts.check_stop(&snapshot, &Settings::default(), NOW, None).is_none());
+        assert!(alerts.check_stop(&snapshot, &Settings::default(), NOW + 20 * MIN, None).is_some());
+        assert!(alerts.check_stop(&Snapshot::default(), &Settings::default(), NOW + 60 * MIN, None).is_none());
+    }
+
+    #[test]
+    fn the_setting_passes_over_a_stop_for_good() {
+        let mut alerts = QuotaAlerts::default();
+        let off = Settings {
+            notify_on_quota: false,
+            ..Settings::default()
+        };
+        let snapshot = sampled(NOW, 1);
+        alerts.check_stop(&snapshot, &off, NOW, Some(0));
+        assert!(alerts.check_stop(&snapshot, &off, NOW + 30 * MIN, Some(0)).is_none());
+        // Turned on: the stop already passed over is not announced late.
+        assert_eq!(stop_at(&mut alerts, &snapshot, NOW + 40 * MIN, 0), None);
     }
 
     #[test]

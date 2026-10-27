@@ -1,9 +1,11 @@
 //! Plan usage: the quota windows Claude Desktop records in
 //! `%APPDATA%\Claude\plan-usage-history.json`.
 //!
-//! While it runs, Desktop asks claude.ai for the plan's usage every 5 to 30
-//! minutes and appends the percents it got: one sample per organization at
-//! most every 4.5 minutes, kept 30 days. Undocumented format:
+//! Desktop asks claude.ai for the plan's usage when it starts, then every 5
+//! to 15 minutes, but only for 5 hours after the last right-click on its
+//! tray icon (since 3.6556; a remote setting decides the 5 hours). It
+//! appends the percents it got: one sample per organization at most every
+//! 4.5 minutes, kept 30 days. Undocumented format:
 //!
 //! - version 2: `{"version":2,"samples":[{"t":<ms>,"org":"<uuid>","u":{"fh":19,"sd":26}}]}`,
 //!   `fh` the 5-hour window, `sd` the 7-day one (other keys: per-model weekly

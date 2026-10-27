@@ -223,6 +223,27 @@ const mockQuota = (): Quota => ({
   },
 });
 
+/** Desktop stopped sampling 8 hours ago: the 5-hour window is over, the week goes on. */
+const pausedQuota = (): Quota => ({
+  sampledAt: ago(8 * 3600),
+  fiveHour: {
+    percent: 0,
+    lengthMs: 5 * HOUR_MS,
+    resetsAt: null,
+    resetMarginMs: 0,
+    endsBy: Date.now() - 3 * HOUR_MS,
+    expired: true,
+  },
+  sevenDay: {
+    percent: 53,
+    lengthMs: 7 * 24 * HOUR_MS,
+    resetsAt: Date.now() + 2 * 24 * HOUR_MS,
+    resetMarginMs: 150 * 60_000,
+    endsBy: Date.now() + 2 * 24 * HOUR_MS + 150 * 60_000,
+    expired: false,
+  },
+});
+
 function link(peerKey: string, peerTitle: string, sentSecondsAgo: number, delivered: boolean): PeerLink {
   const sentAt = ago(sentSecondsAgo);
   return {
@@ -562,7 +583,8 @@ function countSessions(list: readonly SessionView[]): Counts {
 /**
  * Creates the fake backend. Every scenario starts not ready for READY_MS,
  * like the engine before its first pass. `?scenario=empty` then has no
- * session, `?scenario=health` every source failing.
+ * session, `?scenario=health` every source failing, `?scenario=paused` a
+ * quota Desktop stopped sampling.
  */
 export function createMockBackend(): MockBackend {
   const scenario = new URLSearchParams(window.location.search).get("scenario");
@@ -570,7 +592,7 @@ export function createMockBackend(): MockBackend {
   let settings: Settings = { ...MOCK_SETTINGS };
   let sessions: SessionView[] = scenario === "empty" ? [] : initialSessions();
   let health: SourceHealth = scenario === "health" ? brokenHealth() : okHealth();
-  const quota: Quota | null = scenario === "empty" ? null : mockQuota();
+  const quota: Quota | null = scenario === "empty" ? null : scenario === "paused" ? pausedQuota() : mockQuota();
   const tasks: ProposedTask[] = scenario === "empty" ? [] : mockTasks();
   let ready = false;
   /** Increases with every published snapshot, like the engine's. */

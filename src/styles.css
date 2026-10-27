@@ -237,19 +237,26 @@ button {
 /* Plan quota: one gauge per window, under the title bar              */
 /* ------------------------------------------------------------------ */
 
-/* Gauges keep their size and sit side by side from the left: a wide window
-   adds empty space after them, a narrow one shrinks the bars. */
 .quota {
   flex: 0 0 auto;
   display: flex;
-  align-items: center;
-  gap: 24px;
+  flex-direction: column;
+  gap: 2px;
   padding: 6px 14px 7px;
   border-bottom: 1px solid var(--border);
   font-size: 13px;
   line-height: 18px;
   white-space: nowrap;
   color: var(--text-muted);
+}
+
+/* Gauges keep their size and sit side by side from the left: a wide window
+   adds empty space after them, a narrow one shrinks the bars. */
+.quota-meters {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  min-width: 0;
 }
 
 /* Neutral until it gets close to the limit: only amber and red call for attention. */
@@ -338,8 +345,11 @@ button {
   opacity: 0.55;
 }
 
-.quota-age {
-  flex: none;
+/* Its own line under the gauges: why they stopped moving, and what to do. */
+.quota-stale {
+  font-size: 12px;
+  line-height: 16px;
+  white-space: normal;
   color: var(--text-faint);
 }
 
