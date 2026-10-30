@@ -1,0 +1,7 @@
+{
+  "name": "claude-session-monitor",
+  "owner": { "name": "Alexis Crocilla" },
+  "plugins": [
+    { "name": "monitor-compagnon", "source": "./monitor-compagnon" }
+  ]
+}

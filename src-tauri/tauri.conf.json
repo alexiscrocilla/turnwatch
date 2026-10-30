@@ -36,7 +36,22 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "publisher": "Alexis Crocilla",
+    "copyright": "Alexis Crocilla",
+    "shortDescription": "État en direct des sessions Claude Code de Claude Desktop",
+    "resources": {
+      "../mod/.claude-plugin/marketplace.json": "companion/.claude-plugin/marketplace.json",
+      "../mod/monitor-compagnon/.claude-plugin/plugin.json": "companion/monitor-compagnon/.claude-plugin/plugin.json",
+      "../mod/monitor-compagnon/hooks/*": "companion/monitor-compagnon/hooks/"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["French"],
+        "installerHooks": "installer-hooks.nsh"
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

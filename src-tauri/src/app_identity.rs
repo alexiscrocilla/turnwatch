@@ -1,8 +1,8 @@
 //! Registers the app's AppUserModelID (AUMID) for the current user, so that
-//! Windows labels its toasts with the app's name and icon. The exe runs
-//! unpackaged (often straight from `target\release`), so no installer or
-//! shortcut does it, and without an AUMID the toasts would be shown under
-//! Windows PowerShell's.
+//! Windows labels its toasts with the app's name and icon. The installer only
+//! sets the AUMID on its shortcuts, and the exe may also run straight from
+//! `target\release`: without this, the toasts would be shown under Windows
+//! PowerShell's.
 //!
 //! This is Microsoft's documented registration for unpackaged apps. At
 //! startup, and only when the value differs from what is there:

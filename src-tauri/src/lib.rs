@@ -3,6 +3,7 @@
 
 mod app_identity;
 mod autostart;
+pub mod companion_install;
 mod desktop_link;
 mod quota_alerts;
 mod registry;

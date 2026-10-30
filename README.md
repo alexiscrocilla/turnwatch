@@ -19,9 +19,18 @@ Il prévient aussi quand le quota du forfait passe un seuil : la fenêtre de 5 h
 - Claude Desktop avec l'onglet Code. Testé avec Claude Desktop 4.4212 et Claude Code 2.1.309.
 - `git` dans le PATH pour les branches et les fichiers non commités.
 - `gh` connecté (`gh auth login`) pour l'état des PR. Sans `gh`, le reste fonctionne.
-- Facultatif : le mod compagnon, pour le quota exact et les sous-agents (voir **Mod compagnon**).
 
 Pour compiler : Rust stable (MSVC), les Build Tools de Visual Studio, Node.js et pnpm.
+
+## Installer
+
+Lancer `Claude Session Monitor_0.1.0_x64-setup.exe`. L'installeur ne demande pas de droits d'administrateur : tout va dans le compte Windows courant, l'application dans `%LOCALAPPDATA%\Claude Session Monitor`. Il ajoute un raccourci au menu Démarrer et une entrée dans « Applications installées », d'où on la désinstalle.
+
+Il ajoute aussi à Claude Desktop ce qu'il faut pour le quota exact et les sous-agents : le mod compagnon, chargé par chaque session démarrée après l'installation (voir **Mod compagnon**). Il n'y a rien à redémarrer. Si Claude Desktop n'a encore jamais ouvert son onglet Code, le mod ne peut pas être ajouté : l'installeur le dit et finit quand même. L'ouvrir une fois, puis relancer l'installeur, suffit à le rattraper.
+
+L'installeur n'est pas signé : Windows SmartScreen peut afficher « Windows a protégé votre ordinateur » au premier lancement. « Informations complémentaires », puis « Exécuter quand même ».
+
+Pour mettre à jour, lancer l'installeur de la nouvelle version. Il passe d'abord par la désinstallation de l'ancienne : y laisser décochée « Supprimer les données de l'application ». Les réglages, les sessions déjà vues et « Lancer au démarrage de Windows » sont alors conservés.
 
 ## Compiler et lancer
 
@@ -30,10 +39,10 @@ pnpm install
 ```
 
 ```bash
-pnpm tauri build --no-bundle
+pnpm tauri build
 ```
 
-L'exécutable est alors dans `src-tauri\target\release\claude-session-monitor.exe`. Il se lance tel quel, sans installation. `pnpm tauri build` sans `--no-bundle` produit en plus un installateur, mais ce chemin n'a pas encore été essayé.
+L'installeur est alors dans `src-tauri\target\release\bundle\nsis\`, et l'exécutable dans `src-tauri\target\release\claude-session-monitor.exe`. Celui-ci se lance tel quel, sans installation, mais sans le mod. `pnpm tauri build --no-bundle` ne produit que l'exécutable.
 
 En développement, avec rechargement de l'interface :
 
@@ -119,27 +128,27 @@ Ils sont modifiables depuis le menu de l'icône et enregistrés dans `%APPDATA%\
 ## Ce que l'application écrit sur la machine
 
 - `%APPDATA%\local.claude-session-monitor\` : `settings.json`, `acks.json` (sessions déjà vues) et la position de la fenêtre.
-- `HKCU\Software\Classes\AppUserModelId\local.claude-session-monitor` et `%LOCALAPPDATA%\local.claude-session-monitor\toast-icon.png` : le nom et l'icône des notifications, pour un exécutable sans installateur. Supprimer les deux suffit à annuler.
+- `HKCU\Software\Classes\AppUserModelId\local.claude-session-monitor` et `%LOCALAPPDATA%\local.claude-session-monitor\toast-icon.png` : le nom et l'icône des notifications. Supprimer les deux suffit à annuler.
 - Seulement si « Lancer au démarrage de Windows » est coché : la valeur `local.claude-session-monitor` de `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, qui contient le chemin de l'exécutable. C'est elle que liste « Applications au démarrage » dans les paramètres de Windows. Désactiver l'application là (ou dans le Gestionnaire des tâches) décoche aussi la case du menu ; la recocher efface ce réglage de Windows (la valeur du même nom sous `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run`). Décocher la case supprime les deux ; si l'exécutable a été déplacé, la valeur est remise sur son nouveau chemin au lancement suivant. La version de développement (`pnpm tauri dev`) ne propose pas cette case : elle dépend du serveur de développement.
 
 Elle ne modifie rien dans `~\.claude` ni dans les dossiers de Claude Desktop. Seul le mod compagnon, s'il est installé, écrit dans `~\.claude\session-monitor\`.
 
+L'installeur écrit en plus :
+
+- `%LOCALAPPDATA%\Claude Session Monitor\` : l'application, et dans `companion\` la marketplace locale du mod ;
+- `~\.claude\settings.json` et `~\.claude\plugins\`, par le `claude.exe` de Desktop : la marketplace `claude-session-monitor` et le mod activé pour toutes les sessions ;
+- les raccourcis, l'entrée de désinstallation (`HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Claude Session Monitor`) et `HKCU\Software\Alexis Crocilla\Claude Session Monitor`, qui garde le dossier d'installation.
+
+La désinstallation retire tout cela, ainsi que le mod, sa marketplace, le lancement au démarrage et l'identité des notifications. Seule reste la clé `HKCU\Software\Alexis Crocilla\Claude Session Monitor`, où elle note que le lancement au démarrage était coché, pour le remettre à la réinstallation. Si Claude Desktop a déjà été désinstallé, le mod reste aussi dans `~\.claude`, faute de `claude.exe` pour le retirer. Cocher « Supprimer les données de l'application » efface en plus cette clé, `%APPDATA%\local.claude-session-monitor\`, `%LOCALAPPDATA%\local.claude-session-monitor\` et `~\.claude\session-monitor\`.
+
 ## Mod compagnon
 
-`mod/monitor-compagnon` est un mod Claude Code facultatif. Sans lui, tout fonctionne comme décrit plus haut, avec Desktop pour seule source du quota. Avec lui, chaque session écrit ce que le moteur de Claude Code sait déjà, sans appel réseau de plus et sans lire aucun identifiant :
+`mod/monitor-compagnon` est un mod Claude Code, ajouté par l'installeur. Sans lui, tout fonctionne comme décrit plus haut, avec Desktop pour seule source du quota. Avec lui, chaque session écrit ce que le moteur de Claude Code sait déjà, sans appel réseau de plus et sans lire aucun identifiant :
 
 - `quota.json` : le pourcentage et l'heure exacte de réinitialisation des fenêtres de 5 h et de 7 jours, après chaque tour et à chaque point gagné. Plus besoin de clic droit sur l'icône de Desktop ;
 - `sessions/<id>.json` : les sous-agents en cours de la session.
 
-Pour l'installer ou le mettre à jour, copier ce dossier dans une marketplace locale de plugins, puis, avec le Claude Code de Desktop :
-
-```bash
-claude plugin marketplace update mods-locaux
-```
-
-```bash
-claude plugin install monitor-compagnon@mods-locaux
-```
+L'installeur appelle `claude-session-monitor.exe --install-companion`, qui fait le travail avec le `claude.exe` le plus récent de `%APPDATA%\Claude\claude-code` : la marketplace `claude-session-monitor` pointe sur le dossier `companion\` de l'application, d'où Claude Code lit le mod. Une installation du même mod venue d'une autre marketplace est retirée une fois celle-ci en place, pour ne pas écrire deux fois les mêmes fichiers.
 
 Le mod ne se charge que dans les sessions démarrées après son installation, et il lui faut un Claude Code récent : la version 2.1.251 ne connaît pas l'événement `session.measure`, la 2.1.309 si. Toute session peut écrire le quota, y compris celles que le moniteur n'affiche pas, puisque c'est le même pour tout le compte. Le format porte un numéro de version : un fichier d'une autre version est ignoré, et le moniteur retombe sur Desktop.
 
@@ -170,8 +179,11 @@ crates/monitor-core/   Logique, sans dépendance à Tauri
   src/engine.rs        Surveillance des dossiers et reconstruction de l'instantané
   src/bin/dump.rs      Outil de diagnostic en ligne de commande
 src-tauri/             Fenêtre, icône, notifications, commandes
+  installer-hooks.nsh  Ce que l'installeur fait en plus de copier l'application
+  src/companion_install.rs  Ajout et retrait du mod, appelés par l'installeur
 src/                   Interface (TypeScript sans framework)
-mod/monitor-compagnon/ Mod Claude Code facultatif
+mod/                   Marketplace locale copiée avec l'application
+  monitor-compagnon/   Mod Claude Code
 ```
 
 `crates/monitor-core/src/model.rs` définit le contrat de données, recopié à la main dans `src/types.ts`.
