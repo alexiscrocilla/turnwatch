@@ -16,12 +16,13 @@ use crate::aggregate::{self, AggregateInput};
 use crate::desktop::DesktopIndex;
 use crate::git_pr::{GitPrRequest, GitPrService};
 use crate::model::{
-    DesktopSession, GitInfo, PrInfo, Quota, RegistryEntry, SessionState, Settings, Snapshot,
-    SourceHealth, TranscriptInfo, Transition,
+    DesktopSession, GitInfo, PrInfo, Quota, RegistryEntry, RunningAgent, SessionState, Settings,
+    Snapshot, SourceHealth, TranscriptInfo, Transition,
 };
 use crate::paths;
 use crate::registry;
 use crate::transcript::TranscriptTracker;
+use crate::companion::{self, CompanionReader};
 use crate::usage::{self, History};
 
 pub type SnapshotSink = Box<dyn Fn(&Snapshot, &[Transition]) + Send + 'static>;
@@ -211,13 +212,17 @@ impl Engine {
         let mut errors = Vec::new();
         let now = paths::now_ms();
         let pass = readers.read(&paths, settings, now, &mut errors);
-        let quota = read_quota(&mut UsageReader::new(paths.usage_history.clone()), now, &mut errors);
+        let mut companion = CompanionReader::new(paths.companion.clone());
+        let mut usage = UsageReader::new(paths.usage_history.clone());
+        let quota = read_quota(&mut usage, &mut companion, now, &mut errors);
+        let agents = read_agents(&mut companion, &pass.listed_ids, &mut errors);
         let empty = BuildState {
             git_pr: &HashMap::new(),
             acks: &HashMap::new(),
             on_screen: &HashSet::new(),
             turn_ended_at: &HashMap::new(),
             quota: quota.as_ref(),
+            agents: &agents,
         };
         let (mut snapshot, _) = build(&pass, &empty, settings, None, errors, now, None);
         snapshot.ready = true;
@@ -246,6 +251,7 @@ struct Paths {
     projects: PathBuf,
     desktop_config: PathBuf,
     usage_history: PathBuf,
+    companion: PathBuf,
 }
 
 impl Paths {
@@ -256,6 +262,7 @@ impl Paths {
             projects: paths::projects_dir(),
             desktop_config: paths::desktop_config_file(),
             usage_history: paths::usage_history_file(),
+            companion: paths::companion_dir(),
         }
     }
 }
@@ -409,6 +416,7 @@ struct Worker {
     screen: ScreenTracker,
     panes: PaneReader,
     usage: UsageReader,
+    companion: CompanionReader,
 }
 
 fn run_worker(
@@ -453,6 +461,7 @@ fn run_worker(
     };
     let panes = PaneReader::new(paths.desktop_config.clone());
     let usage = UsageReader::new(paths.usage_history.clone());
+    let companion = CompanionReader::new(paths.companion.clone());
     let mut worker = Worker {
         shared,
         tx,
@@ -471,6 +480,7 @@ fn run_worker(
         screen: ScreenTracker::default(),
         panes,
         usage,
+        companion,
     };
 
     worker.load_acks();
@@ -664,7 +674,8 @@ impl Worker {
             shared.acks.clone()
         };
 
-        let quota = read_quota(&mut self.usage, now, &mut errors);
+        let quota = read_quota(&mut self.usage, &mut self.companion, now, &mut errors);
+        let agents = read_agents(&mut self.companion, &pass.listed_ids, &mut errors);
         let prev = lock(&self.shared).last.clone();
         let state = BuildState {
             git_pr: &git_pr,
@@ -672,6 +683,7 @@ impl Worker {
             on_screen: &on_screen,
             turn_ended_at: &self.turns.ended_at,
             quota: quota.as_ref(),
+            agents: &agents,
         };
         let (mut next, built) = build(&pass, &state, &settings, gh_ok, errors, now, prev.as_ref());
         next.ready = true;
@@ -729,6 +741,7 @@ struct BuildState<'a> {
     on_screen: &'a HashSet<String>,
     turn_ended_at: &'a HashMap<String, i64>,
     quota: Option<&'a Quota>,
+    agents: &'a HashMap<String, Vec<RunningAgent>>,
 }
 
 /// Builds the snapshot, falling back to the previous sessions with an error
@@ -753,6 +766,7 @@ fn build(
         registry: &pass.registry,
         desktop: pass.desktop,
         transcripts: &pass.transcripts,
+        agents: state.agents,
         git_pr: state.git_pr,
         acks: state.acks,
         on_screen: state.on_screen,
@@ -777,15 +791,44 @@ fn build(
     (snapshot, built)
 }
 
-/// The plan's usage from Desktop's history, None without one.
-fn read_quota(reader: &mut UsageReader, now: i64, errors: &mut Vec<String>) -> Option<Quota> {
+/// The plan's usage from Desktop's history and the companion mod's latest
+/// sample, None without either.
+fn read_quota(
+    reader: &mut UsageReader,
+    companion: &mut CompanionReader,
+    now: i64,
+    errors: &mut Vec<String>,
+) -> Option<Quota> {
+    let mut failed = |msg: String| errors.push(internal_error("Quota", &msg));
     let history = guarded(|| reader.read().cloned()).unwrap_or_else(|msg| {
-        errors.push(internal_error("Quota", &msg));
+        failed(msg);
         None
-    })?;
-    guarded(|| usage::quota(&history, now)).unwrap_or_else(|msg| {
-        errors.push(internal_error("Quota", &msg));
+    });
+    let desktop = history.and_then(|history| {
+        guarded(|| usage::quota(&history, now)).unwrap_or_else(|msg| {
+            failed(msg);
+            None
+        })
+    });
+    let sample = guarded(|| companion.quota().copied()).unwrap_or_else(|msg| {
+        failed(msg);
         None
+    });
+    guarded(|| companion::merged_quota(desktop.clone(), sample.as_ref(), now)).unwrap_or_else(|msg| {
+        failed(msg);
+        desktop
+    })
+}
+
+/// The sub-agents the companion mod reports for the listed sessions.
+fn read_agents(
+    companion: &mut CompanionReader,
+    listed: &HashSet<String>,
+    errors: &mut Vec<String>,
+) -> HashMap<String, Vec<RunningAgent>> {
+    guarded(|| companion.agents(listed)).unwrap_or_else(|msg| {
+        errors.push(internal_error("Sous-agents", &msg));
+        HashMap::new()
     })
 }
 
@@ -1794,6 +1837,7 @@ mod tests {
             projects: root.join("projects"),
             desktop_config: root.join("config.json"),
             usage_history: root.join("plan-usage-history.json"),
+            companion: root.join("session-monitor"),
         };
         let worker = Worker {
             shared: Arc::new(Mutex::new(Shared {
@@ -1804,6 +1848,7 @@ mod tests {
             sink,
             panes: PaneReader::new(paths.desktop_config.clone()),
             usage: UsageReader::new(paths.usage_history.clone()),
+            companion: CompanionReader::new(paths.companion.clone()),
             paths,
             watches: Vec::new(),
             readers: Readers::default(),
@@ -2404,6 +2449,63 @@ mod tests {
         assert_eq!(reader.stamp, None);
         std::fs::remove_file(&path).expect("remove");
         assert_eq!(reader.read(), None);
+    }
+
+    #[test]
+    fn the_companion_mod_feeds_the_quota_and_the_sub_agents() {
+        let dir = TempDir::new("companion");
+        let now = paths::now_ms();
+        let pid = std::process::id();
+        dir.write(
+            &format!("sessions/{pid}.json"),
+            &serde_json::json!({
+                "pid": pid,
+                "sessionId": "s1",
+                "hostSessionId": "local_a",
+                "entrypoint": "claude-desktop",
+                "status": "busy",
+                "statusUpdatedAt": now - 30_000
+            })
+            .to_string(),
+        );
+        dir.write(
+            "desktop/account/org/local_a.json",
+            &serde_json::json!({
+                "sessionId": "local_a", "cliSessionId": "s1", "title": "Audit",
+                "cwd": r"D:\Projets\démo", "completedTurns": 2
+            })
+            .to_string(),
+        );
+        let resets = now + 3_600_000;
+        dir.write(
+            "session-monitor/quota.json",
+            &serde_json::json!({
+                "version": 1, "sampledAt": now - 60_000,
+                "fiveHour": {"percent": 23.5, "resetsAt": resets}
+            })
+            .to_string(),
+        );
+        dir.write(
+            "session-monitor/sessions/s1.json",
+            r#"{"version":1,"agents":[{"id":"a1","description":"Audit du code","type":"Explore"}]}"#,
+        );
+        let (mut worker, published) = test_worker(&dir.0, None);
+        worker.recompute(false);
+
+        // The file is being rewritten: the last good content stays.
+        dir.write("session-monitor/quota.json", r#"{"version":1,"sam"#);
+        dir.write("session-monitor/sessions/s1.json", r#"{"vers"#);
+        worker.recompute(false);
+
+        let published = lock(&published);
+        assert_eq!(published.len(), 1, "nothing changed");
+        let snapshot = &published[0].0;
+        let quota = snapshot.quota.as_ref().expect("quota");
+        assert!(quota.fed_by_sessions);
+        assert_eq!(quota.five_hour.as_ref().and_then(|w| w.resets_at), Some(resets));
+        let agents = &snapshot.sessions[0].agents;
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].description, "Audit du code");
     }
 
     #[test]

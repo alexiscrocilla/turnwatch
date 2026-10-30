@@ -93,6 +93,7 @@ pub fn quota(history: &History, now_ms: i64) -> Option<Quota> {
         sampled_at,
         five_hour,
         seven_day,
+        fed_by_sessions: false,
     })
 }
 

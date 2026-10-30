@@ -493,16 +493,20 @@ pub struct ProposedTask {
 }
 
 /// Plan usage, from the history Claude Desktop keeps
-/// (`%APPDATA%\Claude\plan-usage-history.json`).
+/// (`%APPDATA%\Claude\plan-usage-history.json`) and, when installed, the
+/// `monitor-compagnon` mod.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Quota {
-    /// When Desktop recorded the latest sample.
+    /// When the latest sample was taken.
     pub sampled_at: i64,
     /// The 5-hour window.
     pub five_hour: Option<QuotaWindow>,
     /// The 7-day window.
     pub seven_day: Option<QuotaWindow>,
+    /// The mod reports it as sessions run: no sample for a while only means
+    /// that none ran, not that Desktop must be asked to sample again.
+    pub fed_by_sessions: bool,
 }
 
 /// One usage window of the plan, as of the latest sample.
@@ -513,11 +517,11 @@ pub struct QuotaWindow {
     pub percent: f64,
     /// Length of the window: 5 hours or 7 days.
     pub length_ms: i64,
-    /// Estimated end of the current window, the middle of the range the
-    /// history allows. None when nothing is used, or when the history cannot
-    /// place it closely enough.
+    /// End of the current window: exact from the mod, else estimated as the
+    /// middle of the range the history allows. None when nothing is used, or
+    /// when the history cannot place it closely enough.
     pub resets_at: Option<i64>,
-    /// Half the width of that range.
+    /// Half the width of that range; 0 for an exact time.
     pub reset_margin_ms: i64,
     /// The latest the window holding the latest sample can end, from the
     /// reset range when known, else from when the window can have started.
@@ -619,6 +623,21 @@ pub struct SessionView {
     pub findings: Option<FindingsReport>,
     /// Why a session is Working with no turn running: what it waits for.
     pub background: Option<BackgroundWait>,
+    /// Its running sub-agents, as the `monitor-compagnon` mod reports them.
+    /// Empty without the mod, and unless the session is Working.
+    pub agents: Vec<RunningAgent>,
+}
+
+/// A sub-agent a session has running.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RunningAgent {
+    pub id: String,
+    /// The task in a few words.
+    pub description: String,
+    /// "Explore", "general-purpose"…
+    #[serde(rename = "type")]
+    pub agent_type: String,
 }
 
 /// A question the session asked at the end of its turn and that the user has

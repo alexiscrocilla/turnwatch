@@ -950,6 +950,23 @@ button {
   pointer-events: none;
 }
 
+/* One small crab per running sub-agent, the others counted after them. */
+.crew {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-faint);
+}
+
+.crew svg {
+  display: block;
+  width: 15px;
+  height: 11px;
+}
+
 .sp-body {
   fill: #d97757;
 }

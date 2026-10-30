@@ -3,7 +3,7 @@
 
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
-import { paintSprite, propOf } from "./sprites";
+import { miniCrab, paintSprite, propOf } from "./sprites";
 import type { Prop } from "./sprites";
 import { CMD, EVENT_SETTINGS, EVENT_SNAPSHOT, EVENT_VISIBILITY } from "./types";
 import type {
@@ -18,6 +18,7 @@ import type {
   ProposedTask,
   Quota,
   QuotaWindow,
+  RunningAgent,
   SessionState,
   SessionView,
   Settings,
@@ -310,6 +311,13 @@ function sanitizeFindings(v: unknown): FindingsReport | null {
   return { count, confirmed, open, at: num(v.at) };
 }
 
+function sanitizeAgents(v: unknown): RunningAgent[] {
+  if (!Array.isArray(v)) return [];
+  return v.flatMap((a) =>
+    isObj(a) && str(a.id) !== "" ? [{ id: str(a.id), description: oneLine(str(a.description)), type: str(a.type) }] : [],
+  );
+}
+
 function sanitizeSession(raw: unknown): SessionView | null {
   if (!isObj(raw) || typeof raw.key !== "string" || raw.key === "") return null;
   const s = raw as unknown as SessionView;
@@ -343,6 +351,7 @@ function sanitizeSession(raw: unknown): SessionView | null {
     },
     findings: sanitizeFindings(raw.findings),
     background: sanitizeBackground(raw.background),
+    agents: sanitizeAgents(raw.agents),
   };
 }
 
@@ -405,7 +414,7 @@ function sanitizeQuota(v: unknown): Quota | null {
   const fiveHour = sanitizeWindow(v.fiveHour);
   const sevenDay = sanitizeWindow(v.sevenDay);
   if (sampledAt === null || (!fiveHour && !sevenDay)) return null;
-  return { sampledAt, fiveHour, sevenDay };
+  return { sampledAt, fiveHour, sevenDay, fedBySessions: v.fedBySessions === true };
 }
 
 function sanitizeTasks(v: unknown): ProposedTask[] {
@@ -1045,11 +1054,11 @@ function elapsedOf(w: QuotaWindow, now: number): number | null {
   return Math.round(Math.min(Math.max(share, 0), 100) * 2) / 2;
 }
 
-function meterModel(week: boolean, w: QuotaWindow, sampledAt: number, now: number): MeterModel {
+function meterModel(week: boolean, w: QuotaWindow, quota: Quota, now: number): MeterModel {
   const label = week ? "7 j" : "5 h";
   const name = week ? "Semaine" : "Fenêtre de 5 h";
   const shown = Math.round(w.percent);
-  const sampled = `Relevé par Claude Desktop : ${formatClock(sampledAt)}`;
+  const sampled = `${quota.fedBySessions ? "Dernier relevé" : "Relevé par Claude Desktop"} : ${formatClock(quota.sampledAt)}`;
   if (w.expired) {
     return {
       label,
@@ -1069,17 +1078,22 @@ function meterModel(week: boolean, w: QuotaWindow, sampledAt: number, now: numbe
     const hi = w.resetsAt + w.resetMarginMs;
     const earliest = clock(lo);
     const latest = clock(hi);
+    const exact = w.resetMarginMs === 0;
     if (week) {
       const day = (ts: number, weekday: "long" | "short"): string =>
         new Date(ts).toLocaleDateString("fr-FR", { weekday, day: "numeric", month: "short" });
       reset = new Date(w.resetsAt).toLocaleDateString("fr-FR", { weekday: "short" });
-      resetPhrase =
-        new Date(lo).toDateString() === new Date(hi).toDateString()
-          ? `réinitialisation ${day(lo, "long")} entre ${earliest} et ${latest}`
-          : `réinitialisation entre ${day(lo, "short")} ${earliest} et ${day(hi, "short")} ${latest}`;
+      if (exact) resetPhrase = `réinitialisation ${day(lo, "long")} à ${earliest}`;
+      else if (new Date(lo).toDateString() === new Date(hi).toDateString()) {
+        resetPhrase = `réinitialisation ${day(lo, "long")} entre ${earliest} et ${latest}`;
+      } else {
+        resetPhrase = `réinitialisation entre ${day(lo, "short")} ${earliest} et ${day(hi, "short")} ${latest}`;
+      }
     } else {
       reset = clock(w.resetsAt);
-      resetPhrase = `réinitialisation vers ${reset} (entre ${earliest} et ${latest})`;
+      resetPhrase = exact
+        ? `réinitialisation à ${reset}`
+        : `réinitialisation vers ${reset} (entre ${earliest} et ${latest})`;
     }
     lines.push(resetPhrase.charAt(0).toUpperCase() + resetPhrase.slice(1));
   } else if (w.percent > 0) {
@@ -1105,8 +1119,8 @@ function quotaModels(now: number): MeterModel[] {
   const quota = snapshot && isReady() ? snapshot.quota : null;
   if (!quota) return [];
   const out: MeterModel[] = [];
-  if (quota.fiveHour) out.push(meterModel(false, quota.fiveHour, quota.sampledAt, now));
-  if (quota.sevenDay) out.push(meterModel(true, quota.sevenDay, quota.sampledAt, now));
+  if (quota.fiveHour) out.push(meterModel(false, quota.fiveHour, quota, now));
+  if (quota.sevenDay) out.push(meterModel(true, quota.sevenDay, quota, now));
   return out;
 }
 
@@ -1150,7 +1164,8 @@ function buildMeter(m: MeterModel): HTMLElement {
 function renderQuota(): void {
   const now = Date.now();
   const models = quotaModels(now);
-  const sampledAt = snapshot?.quota?.sampledAt ?? null;
+  // Fed by sessions, a pause only means none ran: nothing to start again.
+  const sampledAt = snapshot?.quota?.fedBySessions ? null : (snapshot?.quota?.sampledAt ?? null);
   const since = models.length && sampledAt !== null && now - sampledAt > QUOTA_STALE_MS ? formatClock(sampledAt) : "";
 
   ui.quota.hidden = models.length === 0;
@@ -1963,6 +1978,7 @@ function cardDescription(s: SessionView): string {
   const pr = prModel(s);
   if (pr) out.push(`PR #${pr.number}, ${prStatus(pr, s.state)}`);
   out.push(...extrasLines(extrasModel(s)));
+  if (s.agents.length) out.push(agentsText(s.agents));
   const parent = parentTitle(s);
   if (parent) out.push(`Lancée depuis ${parent}`);
   return out.map(sentence).join(" ");
@@ -2007,6 +2023,7 @@ function cardTooltip(s: SessionView): string {
   } else if (!s.activity && s.lastActivityAt !== null && num(s.lastActivityAt) !== null) {
     lines.push(`Dernière activité : ${formatClock(s.lastActivityAt)}`);
   }
+  if (s.agents.length) lines.push(clip(agentsText(s.agents), 300));
   const parent = parentTitle(s);
   if (parent) lines.push(`Lancée depuis ${parent}`);
   lines.push(...extrasLines(extrasModel(s)));
@@ -2031,6 +2048,7 @@ interface HeadModel {
   since: number | null;
   onScreen: boolean;
   cli: boolean;
+  agents: RunningAgent[];
   pr: PrModel | null;
   fold: Fold | null;
 }
@@ -2043,6 +2061,7 @@ const headModel = (s: SessionView, fold: Fold | null): HeadModel => {
     since: s.stateSince,
     onScreen: s.onScreen,
     cli: !s.isDesktop,
+    agents: s.agents,
     pr: pr && isOpen(pr) ? pr : null,
     fold,
   };
@@ -2062,6 +2081,7 @@ function buildHead(m: HeadModel): HTMLElement {
     tag.title = CLI_TOOLTIP;
     head.append(tag);
   }
+  if (m.agents.length) head.append(crew(m.agents));
   if (m.fold) head.append(foldButton(m.fold));
   if (m.pr) head.append(prChip(m.pr, m.state));
   const label = STATE_SHORT[m.state];
@@ -2075,6 +2095,24 @@ function buildHead(m: HeadModel): HTMLElement {
     head.append(status);
   }
   return head;
+}
+
+/** Mini crabs shown for a session's sub-agents; the others are counted after them. */
+const CREW_SHOWN = 3;
+
+/** "2 sous-agents : Audit du code, Tests". */
+function agentsText(agents: readonly RunningAgent[]): string {
+  const names = agents.map((a) => a.description || a.type || "tâche sans nom");
+  return `${agents.length} ${plural(agents.length, "sous-agent", "sous-agents")} : ${names.join(", ")}`;
+}
+
+/** One small crab per running sub-agent. */
+function crew(agents: readonly RunningAgent[]): HTMLElement {
+  const el = h("span", "crew");
+  el.title = agentsText(agents);
+  el.append(...agents.slice(0, CREW_SHOWN).map(miniCrab));
+  if (agents.length > CREW_SHOWN) el.append(h("span", "", `+${agents.length - CREW_SHOWN}`));
+  return el;
 }
 
 /** After the title, as in Desktop's sidebar: folds or unfolds what hangs from the session. */

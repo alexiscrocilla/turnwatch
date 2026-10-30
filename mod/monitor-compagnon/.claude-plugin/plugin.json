@@ -1,0 +1,5 @@
+{
+  "name": "monitor-compagnon",
+  "version": "0.1.0",
+  "description": "Écrit pour Claude Session Monitor le quota exact du forfait et les sous-agents en cours de chaque session"
+}

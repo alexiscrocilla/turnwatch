@@ -2,6 +2,7 @@
 //! shown by the monitor window. No network access except `gh` for PR status.
 
 pub mod aggregate;
+pub mod companion;
 pub mod desktop;
 pub mod engine;
 pub mod git_pr;

@@ -591,6 +591,7 @@ mod tests {
                     ..QuotaWindow::default()
                 }),
                 seven_day: None,
+                fed_by_sessions: false,
             }),
             ..Snapshot::default()
         };

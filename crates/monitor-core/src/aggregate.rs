@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use crate::model::{
     BackgroundKind, BackgroundTask, BackgroundWait, ChecksState, Counts, DesktopSession,
     ErrorMark, GitInfo, MessageSummary, PeerLink, PeerReceipt, PendingQuestion, PrInfo,
-    ProposedTask, RegistryEntry, SessionRef, SessionState, SessionView, Settings, Snapshot,
+    ProposedTask, RegistryEntry, RunningAgent, SessionRef, SessionState, SessionView, Settings, Snapshot,
     SourceHealth, TaskSuggestion, ToolActivity, TranscriptInfo, Transition, TurnOrigin,
 };
 use crate::transcript::plain_text;
@@ -21,6 +21,8 @@ pub struct AggregateInput<'a> {
     pub desktop: &'a HashMap<String, DesktopSession>,
     /// By CLI session id.
     pub transcripts: &'a HashMap<String, TranscriptInfo>,
+    /// Running sub-agents, by CLI session id.
+    pub agents: &'a HashMap<String, Vec<RunningAgent>>,
     /// By session key.
     pub git_pr: &'a HashMap<String, (Option<GitInfo>, Option<PrInfo>)>,
     /// Session key -> time the user acknowledged it (clicked it in the window,
@@ -992,6 +994,12 @@ fn build_view(
             .and_then(|t| t.findings.clone())
             .filter(|f| f.open > 0),
         background: derived.background,
+        // A dead process leaves its list behind: only a Working session has any.
+        agents: if state == SessionState::Working && !stopped {
+            input.agents.get(&entry.session_id).cloned().unwrap_or_default()
+        } else {
+            Vec::new()
+        },
     })
 }
 
@@ -1570,6 +1578,7 @@ mod tests {
         registry: Vec<RegistryEntry>,
         desktop: HashMap<String, DesktopSession>,
         transcripts: HashMap<String, TranscriptInfo>,
+        agents: HashMap<String, Vec<RunningAgent>>,
         git_pr: HashMap<String, (Option<GitInfo>, Option<PrInfo>)>,
         acks: HashMap<String, i64>,
         turn_ended: HashMap<String, i64>,
@@ -1584,6 +1593,7 @@ mod tests {
                 registry: Vec::new(),
                 desktop: HashMap::new(),
                 transcripts: HashMap::new(),
+                agents: HashMap::new(),
                 git_pr: HashMap::new(),
                 acks: HashMap::new(),
                 turn_ended: HashMap::new(),
@@ -1612,6 +1622,7 @@ mod tests {
                 registry: &self.registry,
                 desktop: &self.desktop,
                 transcripts: &self.transcripts,
+                agents: &self.agents,
                 git_pr: &self.git_pr,
                 acks: &self.acks,
                 on_screen: &HashSet::new(),
@@ -3134,6 +3145,28 @@ mod tests {
     }
 
     #[test]
+    fn only_a_working_session_shows_its_sub_agents() {
+        let mut f = Fixture::new();
+        let mut working = entry(1, "local_w");
+        working.status = Some("busy".to_owned());
+        let idle = entry(2, "local_i");
+        f.live(working).live(idle);
+        f.file(desk("local_w")).file(desk("local_i"));
+        let agent = RunningAgent {
+            id: "a1".to_owned(),
+            description: "Audit".to_owned(),
+            agent_type: "Explore".to_owned(),
+        };
+        f.agents.insert("cli-1".to_owned(), vec![agent.clone()]);
+        // Left behind by a process that died.
+        f.agents.insert("cli-2".to_owned(), vec![agent.clone()]);
+
+        assert_eq!(f.view("local_w").agents, [agent]);
+        assert_ne!(f.view("local_i").state, SessionState::Working);
+        assert!(f.view("local_i").agents.is_empty());
+    }
+
+    #[test]
     fn a_card_is_passed_over_once_the_person_wrote_twice_since() {
         let mut f = Fixture::new();
         f.file(DesktopSession {
@@ -4608,6 +4641,7 @@ mod tests {
             registry: &registry,
             desktop: index.sessions(),
             transcripts: &transcripts,
+            agents: &HashMap::new(),
             git_pr: &HashMap::new(),
             acks: &HashMap::new(),
             on_screen: &HashSet::new(),

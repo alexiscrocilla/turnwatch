@@ -47,6 +47,11 @@ pub fn usage_history_file() -> PathBuf {
     desktop_data_dir().join("plan-usage-history.json")
 }
 
+/// What the `monitor-compagnon` mod writes: `<claude_home>\session-monitor`.
+pub fn companion_dir() -> PathBuf {
+    claude_home().join("session-monitor")
+}
+
 pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

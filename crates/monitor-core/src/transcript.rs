@@ -136,7 +136,7 @@ impl TranscriptTracker {
 }
 
 /// Session ids are UUIDs; anything else could escape the projects folder.
-fn is_valid_session_id(id: &str) -> bool {
+pub(crate) fn is_valid_session_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
         && id

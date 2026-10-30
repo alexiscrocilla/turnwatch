@@ -155,6 +155,17 @@ export interface SessionView {
   findings: FindingsReport | null;
   /** Why a session is working with no turn running: what it waits for. */
   background: BackgroundWait | null;
+  /** Running sub-agents, as the monitor-compagnon mod reports them; empty without it. */
+  agents: RunningAgent[];
+}
+
+/** A sub-agent a session has running. */
+export interface RunningAgent {
+  id: string;
+  /** The task in a few words. */
+  description: string;
+  /** "Explore", "general-purpose"… */
+  type: string;
 }
 
 export interface Counts {
@@ -213,12 +224,14 @@ export interface ProposedTask {
   passedOver: boolean;
 }
 
-/** Plan usage, from the history Claude Desktop keeps. */
+/** Plan usage, from the history Claude Desktop keeps and, when installed, the monitor-compagnon mod. */
 export interface Quota {
-  /** When Desktop recorded the latest sample. */
+  /** When the latest sample was taken. */
   sampledAt: number;
   fiveHour: QuotaWindow | null;
   sevenDay: QuotaWindow | null;
+  /** The mod reports it as sessions run: no sample for a while only means none ran. */
+  fedBySessions: boolean;
 }
 
 /** One usage window of the plan, as of the latest sample. */
@@ -226,9 +239,9 @@ export interface QuotaWindow {
   percent: number;
   /** 5 hours or 7 days. */
   lengthMs: number;
-  /** Estimated end of the current window (middle of the possible range); null when unknown. */
+  /** End of the current window: exact from the mod, else the middle of the possible range; null when unknown. */
   resetsAt: number | null;
-  /** Half the width of that range. */
+  /** Half the width of that range; 0 for an exact time. */
   resetMarginMs: number;
   /** The latest the window holding the latest sample can end. */
   endsBy: number;

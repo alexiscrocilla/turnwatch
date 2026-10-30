@@ -139,6 +139,9 @@ function spriteSvg(state: SessionState, prop: Prop | null): SVGSVGElement {
   return svg;
 }
 
+/** The crab at its smallest, one pixel per cell: a sub-agent at work. */
+export const miniCrab = (): SVGSVGElement => spriteSvg("working", null);
+
 /** Brings a `.sprite` element up to date: the drawing is rebuilt only for a new pose. */
 export function paintSprite(el: HTMLElement, view: SpriteView): void {
   const prop = view.state === "working" ? view.prop : null;

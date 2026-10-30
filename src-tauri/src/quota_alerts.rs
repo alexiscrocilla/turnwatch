@@ -17,7 +17,8 @@
 //! Another toast says when Desktop stopped sampling the quota while
 //! sessions work: it only samples for a few hours after a right-click on
 //! its tray icon, and the gauges then stop moving and the thresholds stop
-//! firing.
+//! firing. With the `monitor-compagnon` mod, sessions report the quota
+//! themselves and that toast has no reason to be.
 
 use monitor_core::model::{Quota, QuotaWindow, Settings, Snapshot};
 
@@ -127,7 +128,12 @@ impl QuotaAlerts {
         } else if self.active_since.is_none() {
             self.active_since = Some(now_ms - idle);
         }
-        let sampled_at = snapshot.quota.as_ref()?.sampled_at;
+        let quota = snapshot.quota.as_ref()?;
+        // Sessions report it as they run: there is nothing to start again.
+        if quota.fed_by_sessions {
+            return None;
+        }
+        let sampled_at = quota.sampled_at;
         let silent_since = sampled_at.max(self.active_since?);
         if now_ms - silent_since < STOPPED_AFTER_MS
             || self.stop_announced == Some(sampled_at)
@@ -214,6 +220,7 @@ mod tests {
             sampled_at: NOW,
             five_hour: window(five_hour),
             seven_day: window(seven_day),
+            fed_by_sessions: false,
         }
     }
 
@@ -362,6 +369,17 @@ mod tests {
         assert_eq!(stop_at(&mut alerts, &snapshot, NOW + 22 * MIN, 30_000), None, "back for 30 s");
         assert_eq!(stop_at(&mut alerts, &snapshot, NOW + 41 * MIN, 0), None);
         assert!(stop_at(&mut alerts, &snapshot, NOW + 42 * MIN, 0).is_some());
+    }
+
+    #[test]
+    fn a_quota_fed_by_sessions_never_stops() {
+        let mut alerts = QuotaAlerts::default();
+        let mut snapshot = sampled(NOW, 1);
+        if let Some(quota) = &mut snapshot.quota {
+            quota.fed_by_sessions = true;
+        }
+        stop_at(&mut alerts, &snapshot, NOW, 0);
+        assert_eq!(stop_at(&mut alerts, &snapshot, NOW + 3 * 60 * MIN, 0), None);
     }
 
     #[test]

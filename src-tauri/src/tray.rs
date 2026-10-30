@@ -373,6 +373,7 @@ mod tests {
             sampled_at: 1,
             five_hour: window(19.4, false),
             seven_day: window(27.6, false),
+            fed_by_sessions: false,
         };
         let c = counts(0, 0, 0, 1, 0);
         assert_eq!(tooltip(&c, Some(&quota)), "1 au travail\nQuota : 5 h 19 % · 7 j 28 %");

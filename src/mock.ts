@@ -243,20 +243,21 @@ const HOUR_MS = 3_600_000;
 /** A 5-hour window well used (amber), a week barely started. */
 const mockQuota = (): Quota => ({
   sampledAt: ago(4 * 60),
+  fedBySessions: true,
   fiveHour: {
     percent: 82,
     lengthMs: 5 * HOUR_MS,
     resetsAt: Date.now() + 72 * 60_000,
-    resetMarginMs: 7 * 60_000,
-    endsBy: Date.now() + 79 * 60_000,
+    resetMarginMs: 0,
+    endsBy: Date.now() + 72 * 60_000,
     expired: false,
   },
   sevenDay: {
     percent: 28,
     lengthMs: 7 * 24 * HOUR_MS,
     resetsAt: Date.now() + 6 * 24 * HOUR_MS,
-    resetMarginMs: 150 * 60_000,
-    endsBy: Date.now() + 6 * 24 * HOUR_MS + 150 * 60_000,
+    resetMarginMs: 0,
+    endsBy: Date.now() + 6 * 24 * HOUR_MS,
     expired: false,
   },
 });
@@ -264,6 +265,7 @@ const mockQuota = (): Quota => ({
 /** Desktop stopped sampling 8 hours ago: the 5-hour window is over, the week goes on. */
 const pausedQuota = (): Quota => ({
   sampledAt: ago(8 * 3600),
+  fedBySessions: false,
   fiveHour: {
     percent: 0,
     lengthMs: 5 * HOUR_MS,
@@ -377,6 +379,7 @@ function session(seed: Seed): SessionView {
     version: "2.1.308",
     findings: null,
     background: null,
+    agents: [],
     ...seed,
   };
 }
@@ -504,6 +507,10 @@ function initialSessions(): SessionView[] {
       stateSince: ago(12 * 60),
       onScreen: true,
       activity: act("Bash", "pnpm test --filter web", 3),
+      agents: [
+        { id: "a1", description: "Inventaire des réglages", type: "Explore" },
+        { id: "a2", description: "Audit du formulaire", type: "general-purpose" },
+      ],
       plan: plan(SETTINGS_PLAN, 3),
       git: git("atlas-web", "feat/settings-page", 6),
       messages: { ...noMessages(), awaitingReply: [link(K.search, TITLE_SEARCH, 5 * 60, true)] },
