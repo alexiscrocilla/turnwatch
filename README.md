@@ -1,5 +1,7 @@
 # Turnwatch
 
+[![License: MIT](https://img.shields.io/github/license/alexiscrocilla/turnwatch)](LICENSE)
+
 A small always-on-top Windows window that shows, live, the state of the Claude Code sessions started from the Code tab of Claude Desktop. The idea: minimize Claude Desktop and keep on screen only what matters, which is the session waiting for you, or else a short summary.
 
 <p align="center">
