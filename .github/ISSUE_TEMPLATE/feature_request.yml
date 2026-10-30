@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        The monitor shows current work only, stays read-only and makes no network call of its own: see [what the project is](https://github.com/alexiscrocilla/claude-session-monitor/blob/main/CONTRIBUTING.md#what-the-project-is).
+        The monitor shows current work only, stays read-only and makes no network call of its own: see [what the project is](https://github.com/alexiscrocilla/turnwatch/blob/main/CONTRIBUTING.md#what-the-project-is).
   - type: textarea
     id: problem
     attributes:

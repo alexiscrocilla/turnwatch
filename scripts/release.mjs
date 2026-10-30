@@ -9,10 +9,10 @@
 
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-const WORK = join(process.env.LOCALAPPDATA, 'csm-release')
+const WORK = join(process.env.LOCALAPPDATA, 'turnwatch-release')
 const CLONE = join(WORK, 'clone')
 const TARGET = join(WORK, 'target')
 
@@ -54,11 +54,8 @@ run('pnpm install --frozen-lockfile', inClone)
 run('pnpm check', inClone)
 run('pnpm tauri build', inClone)
 
-// GitHub turns the spaces of an asset's name into dots: name it first, so that
-// the file people download is the one the checksum names.
 const bundle = join(TARGET, 'release', 'bundle', 'nsis')
-const installer = `Claude-Session-Monitor_${version}_x64-setup.exe`
-renameSync(join(bundle, `Claude Session Monitor_${version}_x64-setup.exe`), join(bundle, installer))
+const installer = `Turnwatch_${version}_x64-setup.exe`
 const sha256 = createHash('sha256').update(readFileSync(join(bundle, installer))).digest('hex')
 const sums = join(bundle, 'SHA256SUMS.txt')
 writeFileSync(sums, `${sha256}  ${installer}\n`)

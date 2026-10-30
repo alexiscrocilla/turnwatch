@@ -499,7 +499,7 @@ pub struct ProposedTask {
 
 /// Plan usage, from the history Claude Desktop keeps
 /// (`%APPDATA%\Claude\plan-usage-history.json`) and, when installed, the
-/// `monitor-compagnon` mod.
+/// `turnwatch-companion` mod.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Quota {
@@ -628,7 +628,7 @@ pub struct SessionView {
     pub findings: Option<FindingsReport>,
     /// Why a session is Working with no turn running: what it waits for.
     pub background: Option<BackgroundWait>,
-    /// Its running sub-agents, as the `monitor-compagnon` mod reports them.
+    /// Its running sub-agents, as the `turnwatch-companion` mod reports them.
     /// Empty without the mod, and unless the session is Working.
     pub agents: Vec<RunningAgent>,
 }

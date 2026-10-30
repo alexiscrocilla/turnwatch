@@ -753,7 +753,6 @@ function setShown(value: boolean): void {
 function renderStatic(): void {
   const msg = t();
   root.lang = getLang();
-  document.title = msg.windowTitle;
   ui.btnCompact.title = msg.compactTitle;
   setAttr(ui.btnCompact, "aria-label", msg.compactLabel);
   ui.btnPin.title = pinTitle();

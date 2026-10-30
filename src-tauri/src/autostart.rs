@@ -101,10 +101,10 @@ mod tests {
 
     #[test]
     fn the_command_is_the_quoted_exe_path() {
-        let exe = Path::new(r"D:\Données Utilisateur\claude-session-monitor.exe");
+        let exe = Path::new(r"D:\Données Utilisateur\turnwatch.exe");
         assert_eq!(
             command(exe),
-            r#""D:\Données Utilisateur\claude-session-monitor.exe""#
+            r#""D:\Données Utilisateur\turnwatch.exe""#
         );
     }
 
@@ -122,7 +122,7 @@ mod tests {
     #[test]
     #[ignore = "writes to this user's registry"]
     fn run_key_round_trip() {
-        let name = "local.claude-session-monitor.test";
+        let name = "local.turnwatch.test";
         let value = command(Path::new(r"C:\Dossier é\absent.exe"));
         registry::delete_value(RUN_KEY, name).unwrap();
         assert_eq!(registry::read_value(RUN_KEY, name), None);

@@ -161,7 +161,7 @@ mod tests {
 
     fn scratch_dir(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir()
-            .join("claude-session-monitor-tests")
+            .join("turnwatch-tests")
             .join(format!("{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         dir

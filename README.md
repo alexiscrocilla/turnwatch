@@ -1,4 +1,4 @@
-# Claude Session Monitor
+# Turnwatch
 
 A small always-on-top Windows window that shows, live, the state of the Claude Code sessions started from the Code tab of Claude Desktop. The idea: minimize Claude Desktop and keep on screen only what matters, which is the session waiting for you, or else a short summary.
 
@@ -32,9 +32,9 @@ To build: stable Rust (MSVC), the Visual Studio Build Tools, Node.js and pnpm.
 
 ## Install
 
-Download `Claude-Session-Monitor_<version>_x64-setup.exe` from the [Releases](https://github.com/alexiscrocilla/claude-session-monitor/releases) page and run it. Each release also gives the installer's SHA-256 in `SHA256SUMS.txt`.
+Download `Turnwatch_<version>_x64-setup.exe` from the [Releases](https://github.com/alexiscrocilla/turnwatch/releases) page and run it. Each release also gives the installer's SHA-256 in `SHA256SUMS.txt`.
 
-The installer asks for no administrator rights: everything goes in the current Windows account, the app in `%LOCALAPPDATA%\Claude Session Monitor`. It adds a Start menu shortcut and an entry in "Installed apps", from which you can uninstall it.
+The installer asks for no administrator rights: everything goes in the current Windows account, the app in `%LOCALAPPDATA%\Turnwatch`. It adds a Start menu shortcut and an entry in "Installed apps", from which you can uninstall it.
 
 It also adds to Claude Desktop what the exact quota and the sub-agents need: the companion mod, loaded by every session started after the installation (see **Companion mod**). Nothing needs restarting. If Claude Desktop has never opened its Code tab, the mod cannot be added: the installer says so and finishes anyway. Opening the tab once, then running the installer again, makes up for it.
 
@@ -45,7 +45,7 @@ To update, run the installer of the new version. It first goes through the unins
 ## Build and run
 
 ```bash
-git clone https://github.com/alexiscrocilla/claude-session-monitor.git
+git clone https://github.com/alexiscrocilla/turnwatch.git
 ```
 
 ```bash
@@ -56,7 +56,7 @@ pnpm install
 pnpm tauri build
 ```
 
-The installer is then in `src-tauri\target\release\bundle\nsis\`, and the executable is `src-tauri\target\release\claude-session-monitor.exe`. The executable runs as is, with no installation, but without the mod. `pnpm tauri build --no-bundle` produces only the executable.
+The installer is then in `src-tauri\target\release\bundle\nsis\`, and the executable is `src-tauri\target\release\turnwatch.exe`. The executable runs as is, with no installation, but without the mod. `pnpm tauri build --no-bundle` produces only the executable.
 
 For development, with live reload of the interface:
 
@@ -126,7 +126,7 @@ cargo run --manifest-path crates/monitor-core/Cargo.toml --bin dump -- --summary
 
 ## Settings
 
-They can be changed from the icon's menu and are saved in `%APPDATA%\local.claude-session-monitor\settings.json`:
+They can be changed from the icon's menu and are saved in `%APPDATA%\local.turnwatch\settings.json`:
 
 | Key | Default | Effect |
 |---|---|---|
@@ -143,28 +143,28 @@ They can be changed from the icon's menu and are saved in `%APPDATA%\local.claud
 
 ## What the app writes on the machine
 
-- `%APPDATA%\local.claude-session-monitor\`: `settings.json`, `acks.json` (sessions already seen) and the window's position.
-- `HKCU\Software\Classes\AppUserModelId\local.claude-session-monitor` and `%LOCALAPPDATA%\local.claude-session-monitor\toast-icon.png`: the name and icon of the notifications. Deleting both is enough to undo them.
-- Only if "Start with Windows" is ticked: the `local.claude-session-monitor` value of `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, which holds the path of the executable. That is what "Startup apps" lists in Windows' settings. Turning the app off there (or in Task Manager) also unticks the menu item; ticking it again clears that Windows setting (the value of the same name under `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run`). Unticking the item removes both; if the executable has moved, the value is put back on its new path at the next launch. The development build (`pnpm tauri dev`) does not offer this item: it depends on the development server.
+- `%APPDATA%\local.turnwatch\`: `settings.json`, `acks.json` (sessions already seen) and the window's position.
+- `HKCU\Software\Classes\AppUserModelId\local.turnwatch` and `%LOCALAPPDATA%\local.turnwatch\toast-icon.png`: the name and icon of the notifications. Deleting both is enough to undo them.
+- Only if "Start with Windows" is ticked: the `local.turnwatch` value of `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, which holds the path of the executable. That is what "Startup apps" lists in Windows' settings. Turning the app off there (or in Task Manager) also unticks the menu item; ticking it again clears that Windows setting (the value of the same name under `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run`). Unticking the item removes both; if the executable has moved, the value is put back on its new path at the next launch. The development build (`pnpm tauri dev`) does not offer this item: it depends on the development server.
 
 It changes nothing in `~\.claude` or in Claude Desktop's folders. Only the companion mod, if installed, writes in `~\.claude\session-monitor\`.
 
 The installer also writes:
 
-- `%LOCALAPPDATA%\Claude Session Monitor\`: the app, and in `companion\` the mod's local marketplace;
-- `~\.claude\settings.json` and `~\.claude\plugins\`, through Desktop's `claude.exe`: the `claude-session-monitor` marketplace and the mod, enabled for all sessions;
-- the shortcuts, the uninstall entry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Claude Session Monitor`) and `HKCU\Software\Alexis Crocilla\Claude Session Monitor`, which keeps the install folder.
+- `%LOCALAPPDATA%\Turnwatch\`: the app, and in `companion\` the mod's local marketplace;
+- `~\.claude\settings.json` and `~\.claude\plugins\`, through Desktop's `claude.exe`: the `turnwatch` marketplace and the mod, enabled for all sessions;
+- the shortcuts, the uninstall entry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Turnwatch`) and `HKCU\Software\Alexis Crocilla\Turnwatch`, which keeps the install folder.
 
-Uninstalling removes all of that, as well as the mod, its marketplace, the start with Windows and the notification identity. Only the `HKCU\Software\Alexis Crocilla\Claude Session Monitor` key stays, where it notes that start with Windows was ticked, to restore it on reinstalling. If Claude Desktop has already been uninstalled, the mod also stays in `~\.claude`, for lack of a `claude.exe` to remove it. Ticking "Delete the application data" also erases that key, `%APPDATA%\local.claude-session-monitor\`, `%LOCALAPPDATA%\local.claude-session-monitor\` and `~\.claude\session-monitor\`.
+Uninstalling removes all of that, as well as the mod, its marketplace, the start with Windows and the notification identity. Only the `HKCU\Software\Alexis Crocilla\Turnwatch` key stays, where it notes that start with Windows was ticked, to restore it on reinstalling. If Claude Desktop has already been uninstalled, the mod also stays in `~\.claude`, for lack of a `claude.exe` to remove it. Ticking "Delete the application data" also erases that key, `%APPDATA%\local.turnwatch\`, `%LOCALAPPDATA%\local.turnwatch\` and `~\.claude\session-monitor\`.
 
 ## Companion mod
 
-`mod/monitor-compagnon` is a Claude Code mod, added by the installer. Without it, everything works as described above, with Desktop as the only source of the quota. With it, each session writes what Claude Code's engine already knows, with no extra network call and without reading any credential:
+`mod/turnwatch-companion` is a Claude Code mod, added by the installer. Without it, everything works as described above, with Desktop as the only source of the quota. With it, each session writes what Claude Code's engine already knows, with no extra network call and without reading any credential:
 
 - `quota.json`: the percentage and exact reset time of the 5-hour and 7-day windows, after each turn and at each point gained. No more right-click on Desktop's icon;
 - `sessions/<id>.json`: the session's running sub-agents.
 
-The installer calls `claude-session-monitor.exe --install-companion`, which does the work with the most recent `claude.exe` in `%APPDATA%\Claude\claude-code`: the `claude-session-monitor` marketplace points at the app's `companion\` folder, from which Claude Code reads the mod. An install of the same mod from another marketplace is removed once this one is in place, so the same files are not written twice.
+The installer calls `turnwatch.exe --install-companion`, which does the work with the most recent `claude.exe` in `%APPDATA%\Claude\claude-code`: the `turnwatch` marketplace points at the app's `companion\` folder, from which Claude Code reads the mod. An install of the same mod from another marketplace is removed once this one is in place, so the same files are not written twice.
 
 The mod only loads in sessions started after it was installed, and it needs a recent Claude Code: version 2.1.251 does not know the `session.measure` event, 2.1.309 does. Any session can write the quota, including those the monitor does not show, since it is the same for the whole account. The format carries a version number: a file of another version is ignored, and the monitor falls back on Desktop.
 
@@ -179,7 +179,7 @@ The mod only loads in sessions started after it was installed, and it needs a re
 - A paused session whose last turn is more than 7 days old no longer appears, even if its question is still unanswered.
 - With the companion mod, the quota only moves when a session gets an answer: usage elsewhere (Chat, Cowork) only appears at the next answer, unless Desktop samples in the meantime. The mod cannot delete files: a small file stays in `sessions/` for each session that started a sub-agent.
 - Without the mod, the quota is only sampled while Claude Desktop is open, at most every 5 minutes: the gauge can lag a few minutes behind real usage. Its reset times are estimates from the history; they are missing while the history shows no clear enough reset.
-- Development builds use the identifier `local.claude-session-monitor.dev` and can run alongside the release version.
+- Development builds use the identifier `local.turnwatch.dev` and can run alongside the release version.
 
 ## Structure
 
@@ -201,7 +201,7 @@ src-tauri/             Window, icon, notifications, commands
 src/                   Interface (TypeScript with no framework)
   i18n.ts              English and French text of the window
 mod/                   Local marketplace copied with the app
-  monitor-compagnon/   Claude Code mod
+  turnwatch-companion/ Claude Code mod
 scripts/               Checks before a push, and the release
 ```
 
@@ -216,7 +216,7 @@ pnpm check
 This builds the interface, runs clippy and runs the tests of both crates. The mod has its own tests, which need a recent `claude`: use the one in `%APPDATA%\Claude\claude-code\<version>\<hash>\`.
 
 ```bash
-claude plugin test mod/monitor-compagnon
+claude plugin test mod/turnwatch-companion
 ```
 
 Outside Tauri, `pnpm dev` serves the interface on http://localhost:1420 with fictional data (`src/mock.ts`), useful for design work. Add `?lang=en` or `?lang=fr` to pick the language.

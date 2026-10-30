@@ -42,7 +42,6 @@ const resultsFr = (n: number): string => `${n} ${pluralFr(n, "résultat", "résu
 
 const en = {
   // Window
-  windowTitle: "Claude Sessions",
   sessionsRegion: "Sessions",
   compactTitle: "Compact mode",
   compactLabel: "Switch to compact mode",
@@ -307,7 +306,6 @@ const en = {
 
 const fr: typeof en = {
   // Window
-  windowTitle: "Sessions Claude",
   sessionsRegion: "Sessions",
   compactTitle: "Barre compacte",
   compactLabel: "Passer en barre compacte",

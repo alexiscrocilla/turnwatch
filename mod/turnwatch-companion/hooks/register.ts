@@ -1,6 +1,6 @@
 import type { AgentInfo, EngineInterface, Register, SessionRateLimit } from 'claude-code'
 
-// What this mod writes for Claude Session Monitor, in `<config>/session-monitor`:
+// What this mod writes for Turnwatch, in `<config>/session-monitor`:
 //   quota.json            the plan's quota, the same for every session: the last
 //                         one to get an answer from the API writes it;
 //   sessions/<id>.json    the running sub-agents of session <id>.

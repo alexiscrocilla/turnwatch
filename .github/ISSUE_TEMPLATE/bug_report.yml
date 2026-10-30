@@ -21,7 +21,7 @@ body:
   - type: input
     id: monitor
     attributes:
-      label: Claude Session Monitor version
+      label: Turnwatch version
       placeholder: "0.1.0"
     validations:
       required: true

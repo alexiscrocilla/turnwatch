@@ -45,7 +45,7 @@ git config core.hooksPath .githooks
 
 `git push --no-verify` skips the hook once.
 
-The check leaves out the mod's tests, which need Claude Code: if you change `mod/`, run `claude plugin test mod/monitor-compagnon` with the `claude.exe` in `%APPDATA%\Claude\claude-code\<version>\<hash>\`. The `claude` on your PATH may be too old.
+The check leaves out the mod's tests, which need Claude Code: if you change `mod/`, run `claude plugin test mod/turnwatch-companion` with the `claude.exe` in `%APPDATA%\Claude\claude-code\<version>\<hash>\`. The `claude` on your PATH may be too old.
 
 Changes to the interface need a look in both languages and in the narrow window: the window is 380 px wide.
 
@@ -63,7 +63,7 @@ Changes to the interface need a look in both languages and in the narrow window:
 The installer changes your real Claude Code configuration, and installing it replaces a running monitor. To test it safely, build a variant with its own name, and keep the build out of `src-tauri\target`, which a running monitor locks:
 
 ```bash
-CARGO_TARGET_DIR=/some/scratch/folder pnpm tauri build --config '{"identifier":"local.csm-test","productName":"CSM Test","mainBinaryName":"csm-test"}'
+CARGO_TARGET_DIR=/some/scratch/folder pnpm tauri build --config '{"identifier":"local.turnwatch-test","productName":"Turnwatch Test","mainBinaryName":"turnwatch-test"}'
 ```
 
 Then run the installer with `CLAUDE_CONFIG_DIR` pointing at a scratch folder. The variant has its own process name, registry values and application data, and its plugin configuration goes to that folder. To simulate a PC without Claude Code, set `APPDATA` to an empty folder for the installer: NSIS ignores it, but the app reads it.
@@ -78,7 +78,7 @@ For the maintainer. Raise the version in `src-tauri/tauri.conf.json`, `package.j
 pnpm release
 ```
 
-It needs `gh` logged in. It builds from a fresh clone of `main` in `%LOCALAPPDATA%\csm-release`, runs the checks there, pushes the tag and opens a draft release with the installer and its SHA-256. Nothing is public until you publish the draft on GitHub.
+It needs `gh` logged in. It builds from a fresh clone of `main` in `%LOCALAPPDATA%\turnwatch-release`, runs the checks there, pushes the tag and opens a draft release with the installer and its SHA-256. Nothing is public until you publish the draft on GitHub.
 
 ## Reporting bugs
 

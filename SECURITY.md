@@ -27,5 +27,5 @@ The monitor reads sensitive material: session transcripts, which can hold anythi
 The installer is not signed, so Windows does not vouch for it. Each release lists its SHA-256 in `SHA256SUMS.txt`, and [`scripts/release.mjs`](scripts/release.mjs) builds the installers on the maintainer's computer, from a fresh clone of the tagged commit. To check a download:
 
 ```bash
-sha256sum Claude-Session-Monitor_*_x64-setup.exe
+sha256sum Turnwatch_*_x64-setup.exe
 ```

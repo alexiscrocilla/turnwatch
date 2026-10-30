@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Claude Session Monitor",
+  "productName": "Turnwatch",
   "version": "0.1.0",
-  "identifier": "local.claude-session-monitor",
+  "identifier": "local.turnwatch",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Sessions Claude",
+        "title": "Turnwatch",
         "width": 380,
         "height": 560,
         "minWidth": 300,
@@ -42,8 +42,8 @@
     "shortDescription": "Live status of the Claude Code sessions in Claude Desktop",
     "resources": {
       "../mod/.claude-plugin/marketplace.json": "companion/.claude-plugin/marketplace.json",
-      "../mod/monitor-compagnon/.claude-plugin/plugin.json": "companion/monitor-compagnon/.claude-plugin/plugin.json",
-      "../mod/monitor-compagnon/hooks/*": "companion/monitor-compagnon/hooks/"
+      "../mod/turnwatch-companion/.claude-plugin/plugin.json": "companion/turnwatch-companion/.claude-plugin/plugin.json",
+      "../mod/turnwatch-companion/hooks/*": "companion/turnwatch-companion/hooks/"
     },
     "windows": {
       "nsis": {

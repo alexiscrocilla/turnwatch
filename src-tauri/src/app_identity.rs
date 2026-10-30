@@ -100,15 +100,15 @@ mod tests {
     #[test]
     fn registry_path_is_per_user_under_classes() {
         assert_eq!(
-            key_path("local.claude-session-monitor"),
-            r"Software\Classes\AppUserModelId\local.claude-session-monitor"
+            key_path("local.turnwatch"),
+            r"Software\Classes\AppUserModelId\local.turnwatch"
         );
     }
 
     #[test]
     fn app_ids_are_checked() {
-        assert!(is_valid_app_id("local.claude-session-monitor"));
-        assert!(is_valid_app_id("local.claude-session-monitor.dev"));
+        assert!(is_valid_app_id("local.turnwatch"));
+        assert!(is_valid_app_id("local.turnwatch.dev"));
         assert!(!is_valid_app_id(""));
         assert!(!is_valid_app_id("with space"));
         assert!(!is_valid_app_id(r"a\b"));
@@ -118,24 +118,24 @@ mod tests {
 
     #[test]
     fn values_name_the_app_and_its_icon() {
-        let icon = Path::new(r"C:\Users\É\AppData\Local\local.claude-session-monitor\toast-icon.png");
+        let icon = Path::new(r"C:\Users\É\AppData\Local\local.turnwatch\toast-icon.png");
         assert_eq!(
-            values("Claude Session Monitor", Some(icon)),
+            values("Turnwatch", Some(icon)),
             vec![
-                ("DisplayName", "Claude Session Monitor".to_owned()),
+                ("DisplayName", "Turnwatch".to_owned()),
                 ("IconUri", icon.display().to_string()),
             ]
         );
         assert_eq!(
-            values("Claude Session Monitor", None),
-            vec![("DisplayName", "Claude Session Monitor".to_owned())]
+            values("Turnwatch", None),
+            vec![("DisplayName", "Turnwatch".to_owned())]
         );
     }
 
     #[test]
     fn icon_is_written_once_and_repaired() {
         let dir = std::env::temp_dir()
-            .join("claude-session-monitor-tests")
+            .join("turnwatch-tests")
             .join(format!("icon dossier é-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let path = write_icon(&dir).unwrap();

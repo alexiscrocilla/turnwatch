@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Reads the state of Claude Code sessions from local files"
 authors = ["Alexis Crocilla"]
 license = "MIT"
-repository = "https://github.com/alexiscrocilla/claude-session-monitor"
+repository = "https://github.com/alexiscrocilla/turnwatch"
 edition = "2024"
 
 [dependencies]

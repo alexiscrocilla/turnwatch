@@ -1,4 +1,4 @@
-//! Tauri shell of Claude Session Monitor: wires the monitor-core engine to the
+//! Tauri shell of Turnwatch: wires the monitor-core engine to the
 //! window, the tray icon and Windows toasts.
 
 mod app_identity;
@@ -54,10 +54,6 @@ fn starting() -> String {
         .to_owned()
 }
 
-/// Title of the main window, which Windows shows in the taskbar.
-fn window_title() -> &'static str {
-    i18n::current().pick("Claude Sessions", "Sessions Claude")
-}
 
 /// State shared by the commands, the tray and the engine sink.
 struct Shell {
@@ -155,7 +151,7 @@ fn use_dev_identity(config: &mut tauri::Config) {
     let name = config
         .product_name
         .take()
-        .unwrap_or_else(|| "Claude Session Monitor".to_owned());
+        .unwrap_or_else(|| "Turnwatch".to_owned());
     config.product_name = Some(format!("{name} (dev)"));
     for window in &mut config.app.windows {
         window.title.push_str(" (dev)");
@@ -185,7 +181,6 @@ fn setup(app: &AppHandle) -> tauri::Result<()> {
     )?;
 
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
-        let _ = window.set_title(window_title());
         let _ = window.set_always_on_top(settings.always_on_top);
         // The restored position may be off screen: a monitor that is gone, or
         // a compact bar saved near the bottom edge.
@@ -547,9 +542,6 @@ fn update_settings(
     shell.engine.set_settings(new.clone());
 
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
-        if new.language != old.language {
-            let _ = window.set_title(window_title());
-        }
         let _ = window.set_always_on_top(new.always_on_top);
         // A window dragged down to the bar is expanded too, even though the
         // setting already says "not compact".
@@ -1062,18 +1054,18 @@ mod tests {
     #[test]
     fn dev_builds_have_their_own_identity() {
         let mut config: tauri::Config = serde_json::from_value(serde_json::json!({
-            "identifier": "local.claude-session-monitor",
-            "productName": "Claude Session Monitor",
-            "app": { "windows": [{ "label": "main", "title": "Sessions Claude" }] }
+            "identifier": "local.turnwatch",
+            "productName": "Turnwatch",
+            "app": { "windows": [{ "label": "main", "title": "Turnwatch" }] }
         }))
         .unwrap();
         use_dev_identity(&mut config);
-        assert_eq!(config.identifier, "local.claude-session-monitor.dev");
+        assert_eq!(config.identifier, "local.turnwatch.dev");
         assert_eq!(
             config.product_name.as_deref(),
-            Some("Claude Session Monitor (dev)")
+            Some("Turnwatch (dev)")
         );
-        assert_eq!(config.app.windows[0].title, "Sessions Claude (dev)");
+        assert_eq!(config.app.windows[0].title, "Turnwatch (dev)");
         assert!(app_identity::is_valid_app_id(&config.identifier));
     }
 }

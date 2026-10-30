@@ -23,9 +23,9 @@ use serde::Deserialize;
 const INSTALL_ARG: &str = "--install-companion";
 const UNINSTALL_ARG: &str = "--uninstall-companion";
 /// `name` in `mod\.claude-plugin\marketplace.json`.
-const MARKETPLACE: &str = "claude-session-monitor";
+const MARKETPLACE: &str = "turnwatch";
 /// `name` in the mod's `plugin.json`.
-const MOD_NAME: &str = "monitor-compagnon";
+const MOD_NAME: &str = "turnwatch-companion";
 /// Folder of the marketplace next to the exe, from `bundle.resources` in
 /// `tauri.conf.json`.
 const COMPANION_DIR: &str = "companion";
@@ -165,7 +165,7 @@ mod tests {
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir()
-            .join("claude-session-monitor-tests")
+            .join("turnwatch-tests")
             .join(format!("{name} é-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -213,12 +213,12 @@ mod tests {
     #[test]
     fn only_the_same_mod_from_another_marketplace_gives_way() {
         let list = r#"[
-            { "id": "monitor-compagnon@mods-locaux", "version": "0.1.0", "scope": "user" },
-            { "id": "monitor-compagnon@claude-session-monitor", "version": "0.1.0", "scope": "user" },
-            { "id": "monitor-compagnon@projet", "version": "0.1.0", "scope": "project" },
+            { "id": "turnwatch-companion@mods-locaux", "version": "0.1.0", "scope": "user" },
+            { "id": "turnwatch-companion@turnwatch", "version": "0.1.0", "scope": "user" },
+            { "id": "turnwatch-companion@projet", "version": "0.1.0", "scope": "project" },
             { "id": "vue-scindee@mods-locaux", "version": "0.2.0", "scope": "user" }
         ]"#;
-        assert_eq!(other_installs(list), vec!["monitor-compagnon@mods-locaux"]);
+        assert_eq!(other_installs(list), vec!["turnwatch-companion@mods-locaux"]);
     }
 
     #[test]

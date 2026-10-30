@@ -157,7 +157,7 @@ export interface SessionView {
   findings: FindingsReport | null;
   /** Why a session is working with no turn running: what it waits for. */
   background: BackgroundWait | null;
-  /** Running sub-agents, as the monitor-compagnon mod reports them; empty without it. */
+  /** Running sub-agents, as the turnwatch-companion mod reports them; empty without it. */
   agents: RunningAgent[];
 }
 
@@ -228,7 +228,7 @@ export interface ProposedTask {
   passedOver: boolean;
 }
 
-/** Plan usage, from the history Claude Desktop keeps and, when installed, the monitor-compagnon mod. */
+/** Plan usage, from the history Claude Desktop keeps and, when installed, the turnwatch-companion mod. */
 export interface Quota {
   /** When the latest sample was taken. */
   sampledAt: number;

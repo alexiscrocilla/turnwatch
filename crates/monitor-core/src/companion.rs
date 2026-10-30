@@ -1,4 +1,4 @@
-//! What the `monitor-compagnon` Claude Code mod writes for the monitor, in
+//! What the `turnwatch-companion` Claude Code mod writes for the monitor, in
 //! `<claude_home>\session-monitor`:
 //!
 //! - `quota.json`: `{"version":1,"sampledAt":<ms>,"fiveHour":{"percent":23.5,"resetsAt":<ms>},"sevenDay":{…}}`,

@@ -1,7 +1,7 @@
 {
-  "name": "claude-session-monitor",
+  "name": "turnwatch",
   "owner": { "name": "Alexis Crocilla" },
   "plugins": [
-    { "name": "monitor-compagnon", "source": "./monitor-compagnon" }
+    { "name": "turnwatch-companion", "source": "./turnwatch-companion" }
   ]
 }

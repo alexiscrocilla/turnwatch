@@ -17,7 +17,7 @@
 //! Another toast says when Desktop stopped sampling the quota while
 //! sessions work: it only samples for a few hours after a right-click on
 //! its tray icon, and the gauges then stop moving and the thresholds stop
-//! firing. With the `monitor-compagnon` mod, sessions report the quota
+//! firing. With the `turnwatch-companion` mod, sessions report the quota
 //! themselves and that toast has no reason to be.
 
 use monitor_core::i18n::{self, Lang};

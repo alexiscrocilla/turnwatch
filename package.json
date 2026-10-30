@@ -1,11 +1,11 @@
 {
-  "name": "claude-session-monitor",
+  "name": "turnwatch",
   "private": true,
   "version": "0.1.0",
   "description": "Live status of the Claude Code sessions in Claude Desktop",
   "author": "Alexis Crocilla",
   "license": "MIT",
-  "repository": "github:alexiscrocilla/claude-session-monitor",
+  "repository": "github:alexiscrocilla/turnwatch",
   "packageManager": "pnpm@12.16.1",
   "type": "module",
   "scripts": {

@@ -1,0 +1,7 @@
+{
+  "name": "turnwatch-companion",
+  "version": "0.1.0",
+  "description": "Writes the plan's exact quota and each session's running sub-agents for Turnwatch",
+  "license": "MIT",
+  "repository": "https://github.com/alexiscrocilla/turnwatch"
+}
