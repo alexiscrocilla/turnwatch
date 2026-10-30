@@ -8,7 +8,7 @@ The monitor answers one question: which of my sessions needs me now? Some choice
 
 - **Current work only.** It shows what is in progress. Token counts, backlogs and lists of worktrees are out of scope.
 - **Read-only.** The app reads Claude Code's and Claude Desktop's files and never writes in them. Only the companion mod writes, and only in `~/.claude/session-monitor`.
-- **Local.** No telemetry, no network call of its own (`gh` is the one exception, for PR status), and no credential read, by the app or by the mod.
+- **Local.** No telemetry, no network call of its own beyond the update check (and `gh`, for PR status), and no credential read, by the app or by the mod.
 - **Quiet.** No continuous animation: it would keep WebView2 busy all day in a window that stays open. Anything that moves does so on an event.
 
 ## Getting started
@@ -70,6 +70,14 @@ Then run the installer with `CLAUDE_CONFIG_DIR` pointing at a scratch folder. Th
 
 Silent mode (`/S`) skips the pages that matter, namely the update page and the uninstaller's "Delete the application data" box, so go through the real windows too.
 
+To test an update, build that variant twice, with a `version` of its own each time in `--config`, a throwaway key from `pnpm tauri signer generate`, and this, which replaces GitHub with a local server:
+
+```json
+{"plugins":{"updater":{"pubkey":"…","endpoints":["http://127.0.0.1:8765/latest.json"],"dangerousInsecureTransportProtocol":true}}}
+```
+
+Sign the newer installer with `pnpm tauri signer sign --app-version`, serve it with a `latest.json` like the one [`scripts/release.mjs`](scripts/release.mjs) writes, and install the older one: the app needs an `uninstall.exe` beside it to update itself. The app the installer restarts no longer has your `CLAUDE_CONFIG_DIR`, so stop it before offering it another version: that update's installer would add the mod to your real configuration.
+
 ## Releasing
 
 For the maintainer. Raise the version in `src-tauri/tauri.conf.json`, `package.json` and both `Cargo.toml` files, update `CHANGELOG.md`, push `main`, then:
@@ -78,7 +86,9 @@ For the maintainer. Raise the version in `src-tauri/tauri.conf.json`, `package.j
 pnpm release
 ```
 
-It needs `gh` logged in. It builds from a fresh clone of `main` in `%LOCALAPPDATA%\turnwatch-release`, runs the checks there, pushes the tag and opens a draft release with the installer and its SHA-256. Nothing is public until you publish the draft on GitHub.
+It needs `gh` logged in, the updater's private key in `~/.tauri/turnwatch-updater.key` with its `.pub` beside it, and the key's password in `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. It builds from a fresh clone of `main` in `%LOCALAPPDATA%\turnwatch-release`, runs the checks there, signs the installer, pushes the tag and opens a draft release with the installer, its SHA-256 and `latest.json`. Nothing is public until you publish the draft on GitHub, and publishing it updates every installed app within 6 hours: test the draft's installer first.
+
+Keep a copy of the key and of its password somewhere safe, apart from each other. Installed apps only accept what the key signs: with a new one (`pnpm tauri signer generate`, then its public key in `plugins.updater.pubkey`), they stop updating, and each user has to run the next installer by hand once.
 
 ## Reporting bugs
 

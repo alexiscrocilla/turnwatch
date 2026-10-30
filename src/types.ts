@@ -264,6 +264,8 @@ export interface Settings {
   messageWindowHours: number;
   compact: boolean;
   alwaysOnTop: boolean;
+  /** Install new versions from GitHub's releases on their own. */
+  autoUpdate: boolean;
   /** "auto", "en" or "fr", chosen in the tray menu. The UI follows `Snapshot.lang`. */
   language: string;
 }

@@ -714,6 +714,8 @@ pub struct Settings {
     pub message_window_hours: u64,
     pub compact: bool,
     pub always_on_top: bool,
+    /// Install new versions from GitHub's releases on their own.
+    pub auto_update: bool,
     /// "en", "fr", or "auto" to follow Windows: see [`crate::i18n::resolve`].
     pub language: String,
 }
@@ -730,6 +732,7 @@ impl Default for Settings {
             message_window_hours: 6,
             compact: false,
             always_on_top: true,
+            auto_update: true,
             language: "auto".to_owned(),
         }
     }

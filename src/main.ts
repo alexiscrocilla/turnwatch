@@ -92,6 +92,7 @@ const DEFAULT_SETTINGS: Settings = {
   messageWindowHours: 6,
   compact: false,
   alwaysOnTop: true,
+  autoUpdate: true,
   language: "auto",
 };
 

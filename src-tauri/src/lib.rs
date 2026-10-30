@@ -10,6 +10,7 @@ mod registry;
 mod settings_store;
 mod toasts;
 mod tray;
+mod updater;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -94,6 +95,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(StateFlags::POSITION)
@@ -176,6 +178,7 @@ fn setup(app: &AppHandle) -> tauri::Result<()> {
         app,
         &settings,
         autostart::AVAILABLE.then(|| autostart::is_enabled(app)),
+        updater::available(),
         on_menu_event,
         toggle_main_window,
     )?;
@@ -209,6 +212,7 @@ fn setup(app: &AppHandle) -> tauri::Result<()> {
     );
     let engine = Engine::start_with_state(settings, config_dir, sink);
     start_toast_ticker(app.clone(), engine.clone(), Arc::clone(&shared), notifier);
+    updater::start(app.clone(), Arc::clone(&shared));
     app.manage(Shell {
         engine,
         settings: shared,
@@ -218,6 +222,10 @@ fn setup(app: &AppHandle) -> tauri::Result<()> {
         apply_lock: Mutex::new(()),
         feed,
     });
+
+    if updater::take_stay_hidden(app) {
+        let _ = hide_main_window(app);
+    }
 
     // Clicks on the toasts shown by the plugin (fallback path).
     let handle = app.clone();
@@ -802,6 +810,10 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
                 set_autostart(&app, wanted);
             });
         }
+        tray::MENU_CHECK_UPDATE => {
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || updater::check_now(&app));
+        }
         _ => {
             let Some(toggle) = menu_toggle(&id) else {
                 return;
@@ -845,6 +857,7 @@ fn menu_toggle(id: &str) -> Option<fn(&mut Settings)> {
         tray::MENU_NOTIFY_ERROR => |s| s.notify_on_error = !s.notify_on_error,
         tray::MENU_NOTIFY_QUOTA => |s| s.notify_on_quota = !s.notify_on_quota,
         tray::MENU_INCLUDE_CLI => |s| s.include_cli_sessions = !s.include_cli_sessions,
+        tray::MENU_AUTO_UPDATE => |s| s.auto_update = !s.auto_update,
         tray::MENU_LANGUAGE_AUTO => |s| s.language = "auto".to_owned(),
         tray::MENU_LANGUAGE_EN => |s| s.language = "en".to_owned(),
         tray::MENU_LANGUAGE_FR => |s| s.language = "fr".to_owned(),
@@ -853,9 +866,14 @@ fn menu_toggle(id: &str) -> Option<fn(&mut Settings)> {
     Some(toggle)
 }
 
-fn quit(app: &AppHandle) {
+/// What the next start needs, saved before the process ends.
+fn save_state(app: &AppHandle) {
     let _ = app.save_window_state(StateFlags::POSITION);
     flush_engine(app);
+}
+
+fn quit(app: &AppHandle) {
+    save_state(app);
     app.exit(0);
 }
 
@@ -1119,6 +1137,7 @@ mod tests {
             (tray::MENU_NOTIFY_ERROR, |s| s.notify_on_error),
             (tray::MENU_NOTIFY_QUOTA, |s| s.notify_on_quota),
             (tray::MENU_INCLUDE_CLI, |s| s.include_cli_sessions),
+            (tray::MENU_AUTO_UPDATE, |s| s.auto_update),
         ] {
             let mut settings = start.clone();
             menu_toggle(id).expect(id)(&mut settings);
@@ -1127,6 +1146,7 @@ mod tests {
         assert!(menu_toggle(tray::MENU_QUIT).is_none());
         // Kept in the registry, not in the settings.
         assert!(menu_toggle(tray::MENU_AUTOSTART).is_none());
+        assert!(menu_toggle(tray::MENU_CHECK_UPDATE).is_none());
     }
 
     #[test]

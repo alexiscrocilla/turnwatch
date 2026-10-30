@@ -25,6 +25,8 @@ pub const MENU_NOTIFY_QUOTA: &str = "notify_on_quota";
 pub const MENU_INCLUDE_CLI: &str = "include_cli_sessions";
 /// Not a setting: the registry says whether the app starts with Windows.
 pub const MENU_AUTOSTART: &str = "autostart";
+pub const MENU_AUTO_UPDATE: &str = "auto_update";
+pub const MENU_CHECK_UPDATE: &str = "check_update";
 const MENU_LANGUAGE: &str = "language";
 pub const MENU_LANGUAGE_AUTO: &str = "language_auto";
 pub const MENU_LANGUAGE_EN: &str = "language_en";
@@ -48,6 +50,8 @@ pub struct TrayHandles {
     notify_quota: CheckMenuItem<Wry>,
     include_cli: CheckMenuItem<Wry>,
     autostart: CheckMenuItem<Wry>,
+    auto_update: CheckMenuItem<Wry>,
+    check_update: MenuItem<Wry>,
     language: Submenu<Wry>,
     language_auto: CheckMenuItem<Wry>,
     language_en: CheckMenuItem<Wry>,
@@ -59,11 +63,13 @@ pub struct TrayHandles {
 
 /// Builds the tray icon and its menu, and registers [`TrayHandles`].
 /// `autostart`: whether the app starts with Windows now; None when that
-/// cannot be offered (the item is greyed out).
+/// cannot be offered (the item is greyed out). `updates`: whether this copy
+/// can update itself; the update items are greyed out otherwise.
 pub fn create(
     app: &AppHandle,
     settings: &Settings,
     autostart: Option<bool>,
+    updates: bool,
     on_menu: impl Fn(&AppHandle, MenuEvent) + Send + Sync + 'static,
     on_left_click: impl Fn(&AppHandle) + Send + Sync + 'static,
 ) -> tauri::Result<TrayIcon> {
@@ -81,6 +87,21 @@ pub fn create(
         label(MENU_AUTOSTART),
         autostart.is_some(),
         autostart.unwrap_or(false),
+        None::<&str>,
+    )?;
+    let auto_update = CheckMenuItem::with_id(
+        app,
+        MENU_AUTO_UPDATE,
+        label(MENU_AUTO_UPDATE),
+        updates,
+        settings.auto_update,
+        None::<&str>,
+    )?;
+    let check_update = MenuItem::with_id(
+        app,
+        MENU_CHECK_UPDATE,
+        label(MENU_CHECK_UPDATE),
+        updates,
         None::<&str>,
     )?;
     let (auto, en, fr) = language_marks(settings);
@@ -108,6 +129,8 @@ pub fn create(
             &notify_quota,
             &include_cli,
             &autostart,
+            &auto_update,
+            &check_update,
             &language,
             &separator,
             &quit,
@@ -145,6 +168,8 @@ pub fn create(
         notify_quota,
         include_cli,
         autostart,
+        auto_update,
+        check_update,
         language,
         language_auto,
         language_en,
@@ -153,6 +178,13 @@ pub fn create(
         shown: Mutex::new(Some((color, tooltip_text))),
     });
     Ok(tray)
+}
+
+/// Shows or hides the icon.
+pub fn set_visible(app: &AppHandle, visible: bool) {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let _ = tray.set_visible(visible);
+    }
 }
 
 /// Sets the "start with Windows" check mark to what the registry says.
@@ -187,6 +219,8 @@ fn label(id: &str) -> &'static str {
         ),
         MENU_INCLUDE_CLI => ("Include sessions outside Desktop", "Inclure les sessions hors Desktop"),
         MENU_AUTOSTART => ("Start with Windows", "Lancer au démarrage de Windows"),
+        MENU_AUTO_UPDATE => ("Update automatically", "Mettre à jour automatiquement"),
+        MENU_CHECK_UPDATE => ("Check for updates", "Rechercher une mise à jour"),
         MENU_LANGUAGE => ("Language", "Langue"),
         MENU_LANGUAGE_AUTO => ("Same as Windows", "Comme Windows"),
         MENU_LANGUAGE_EN => ("English", "English"),
@@ -219,6 +253,8 @@ pub fn relabel(app: &AppHandle) {
     let _ = handles.notify_quota.set_text(label(MENU_NOTIFY_QUOTA));
     let _ = handles.include_cli.set_text(label(MENU_INCLUDE_CLI));
     let _ = handles.autostart.set_text(label(MENU_AUTOSTART));
+    let _ = handles.auto_update.set_text(label(MENU_AUTO_UPDATE));
+    let _ = handles.check_update.set_text(label(MENU_CHECK_UPDATE));
     let _ = handles.language.set_text(label(MENU_LANGUAGE));
     let _ = handles.language_auto.set_text(label(MENU_LANGUAGE_AUTO));
     let _ = handles.quit.set_text(label(MENU_QUIT));
@@ -237,6 +273,7 @@ pub fn sync_checks(app: &AppHandle, settings: &Settings) {
     let _ = handles.notify_error.set_checked(settings.notify_on_error);
     let _ = handles.notify_quota.set_checked(settings.notify_on_quota);
     let _ = handles.include_cli.set_checked(settings.include_cli_sessions);
+    let _ = handles.auto_update.set_checked(settings.auto_update);
     let (auto, en, fr) = language_marks(settings);
     let _ = handles.language_auto.set_checked(auto);
     let _ = handles.language_en.set_checked(en);
@@ -441,6 +478,8 @@ mod tests {
             MENU_NOTIFY_QUOTA,
             MENU_INCLUDE_CLI,
             MENU_AUTOSTART,
+            MENU_AUTO_UPDATE,
+            MENU_CHECK_UPDATE,
             MENU_LANGUAGE,
             MENU_LANGUAGE_AUTO,
             MENU_LANGUAGE_EN,

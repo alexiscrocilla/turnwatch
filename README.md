@@ -42,7 +42,13 @@ It also adds to Claude Desktop what the exact quota and the sub-agents need: the
 
 The installer is not signed: Windows SmartScreen may show "Windows protected your PC" the first time. Choose "More info", then "Run anyway".
 
-To update, run the installer of the new version. It first goes through the uninstaller of the old one: leave "Delete the application data" unticked there. Settings, sessions already seen and "Start with Windows" are then kept.
+## Updates
+
+Turnwatch updates itself from this repository's releases. 30 seconds after it starts, then every 6 hours, it reads the latest release's `latest.json`. When that version is newer, it downloads the installer, checks its signature, says so in a notification and hands over to the installer, which runs with no window and restarts the app. Nothing else changes: settings, sessions already seen, the window's position and whether it was hidden, "Start with Windows" and the mod stay as they were. Sessions keep running: only the monitor restarts.
+
+The **Update automatically** item of the tray menu turns the checks off, and **Check for updates** runs one at once. Only the installed app updates itself: the executable from a build does not.
+
+Version 0.1.0 predates all this: to leave it, run the new installer by hand once. To update by hand at any time, run the installer of the new version. It first goes through the uninstaller of the old one: leave "Delete the application data" unticked there. Settings, sessions already seen and "Start with Windows" are then kept.
 
 ## Build and run
 
@@ -58,7 +64,7 @@ pnpm install
 pnpm tauri build
 ```
 
-The installer is then in `src-tauri\target\release\bundle\nsis\`, and the executable is `src-tauri\target\release\turnwatch.exe`. The executable runs as is, with no installation, but without the mod. `pnpm tauri build --no-bundle` produces only the executable.
+The installer is then in `src-tauri\target\release\bundle\nsis\`, and the executable is `src-tauri\target\release\turnwatch.exe`. The executable runs as is, with no installation, but without the mod or updates. `pnpm tauri build --no-bundle` produces only the executable.
 
 For development, with live reload of the interface:
 
@@ -75,7 +81,7 @@ pnpm tauri dev
 - **Proposed tasks**: the "New task" cards a session proposed, which you have neither started nor dismissed, appear under that session when it is listed, otherwise in their project's group after its sessions, dashed ("proposed · 2 h"), with their pitch on the second line. Only one at a time asks for your attention, per family of sessions or per project: the newest. The others wait behind a row ("2 proposed tasks") that a click unfolds. A task also goes there once you have written twice to its session since it was proposed without starting it: it then no longer counts among the announced tasks. A click on the card opens the session that proposed it: that is where, in Desktop, you start or dismiss the card, as no link can do it from outside. The cross ("Not for me") hides the task in the monitor only, and Desktop keeps it. That choice is remembered in the window. A card is shown for 7 days after it was proposed: that is the lifetime Desktop gives its proposals, and the monitor applies it to old cards too, which Desktop keeps forever (the tooltip says which of the two rules applies).
 - **Click on a card**: opens that session in Claude Desktop (link `claude://code/continue?session=local_…`, the same as in Desktop's jump list) and marks it as seen.
 - **Click on the PR badge**: opens the PR in the browser. When Desktop's Auto-fix watches the PR (circular arrow), Desktop restarts the session itself if CI fails, on a conflict or on a review comment. While the session works on a red CI or a conflict, the tooltip says "Auto-fix is on it". Desktop only restarts it once per failure: if it waits for you, stops on an error or ends without solving the problem, it is up to you. The state comes from the PR card Desktop keeps for the session, with the same rule as Desktop (PR open, on GitHub, neither dismissed nor inherited from a copied session), and is shown only while Desktop runs.
-- **Notification area icon**: its color follows the most urgent session, and its tooltip gives the summary, then the quota on a second line. A click shows or hides the window. The menu changes the settings, starts the monitor with Windows, picks the language and quits. Hiding the window does not close the app.
+- **Notification area icon**: its color follows the most urgent session, and its tooltip gives the summary, then the quota on a second line. A click shows or hides the window. The menu changes the settings, starts the monitor with Windows, checks for updates, picks the language and quits. Hiding the window does not close the app.
 - **Language**: by default the app follows Windows' display language: French if it is French, English otherwise. The **Language** item of the tray menu forces English or French, at once and with no restart. Text that comes from sessions stays in the language it was written in, and button labels already read from a session change at its next message.
 
 ### States
@@ -105,7 +111,7 @@ How these states are decided:
 
 ## Where the data comes from
 
-Everything is read on the machine, read-only. There is no telemetry, and the app makes no network call of its own: the only network access goes through `gh`, for PR status.
+Everything is read on the machine, read-only. There is no telemetry. The network is used for two things only: `gh`, for PR status, and the update check, the app's only call of its own. It downloads `latest.json` from this repository's releases, and the installer when there is a new version, and sends nothing about you or your sessions. GitHub sees the request, as it does for any download. Turning off **Update automatically** stops it.
 
 | Source | What it gives | Documented format? |
 |---|---|---|
@@ -141,11 +147,13 @@ They can be changed from the icon's menu and are saved in `%APPDATA%\local.turnw
 | `messageWindowHours` | `6` | Past this, a message without a reply is no longer reported |
 | `compact` | `false` | Compact mode |
 | `alwaysOnTop` | `true` | Window always on top |
+| `autoUpdate` | `true` | Installs new versions on its own (see **Updates**) |
 | `language` | `"auto"` | `"en"`, `"fr"`, or `"auto"` to follow Windows |
 
 ## What the app writes on the machine
 
-- `%APPDATA%\local.turnwatch\`: `settings.json`, `acks.json` (sessions already seen) and the window's position.
+- `%APPDATA%\local.turnwatch\`: `settings.json`, `acks.json` (sessions already seen) and the window's position. During an update of a hidden window, also `update-stay-hidden`, gone once the app has restarted.
+- `%TEMP%\Turnwatch-<version>-updater-…\`: the installer of each update, which stays there until Windows cleans the folder.
 - `HKCU\Software\Classes\AppUserModelId\local.turnwatch` and `%LOCALAPPDATA%\local.turnwatch\toast-icon.png`: the name and icon of the notifications. Deleting both is enough to undo them.
 - Only if "Start with Windows" is ticked: the `local.turnwatch` value of `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, which holds the path of the executable. That is what "Startup apps" lists in Windows' settings. Turning the app off there (or in Task Manager) also unticks the menu item; ticking it again clears that Windows setting (the value of the same name under `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run`). Unticking the item removes both; if the executable has moved, the value is put back on its new path at the next launch. The development build (`pnpm tauri dev`) does not offer this item: it depends on the development server.
 
@@ -199,6 +207,7 @@ crates/monitor-core/   Logic, with no dependency on Tauri
   src/bin/dump.rs      Command-line diagnostic tool
 src-tauri/             Window, icon, notifications, commands
   installer-hooks.nsh  What the installer does beyond copying the app
+  src/updater.rs       Updates from the GitHub releases
   src/companion_install.rs  Adding and removing the mod, called by the installer
 src/                   Interface (TypeScript with no framework)
   i18n.ts              English and French text of the window
