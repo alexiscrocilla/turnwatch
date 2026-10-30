@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" shape-rendering="crispEdges">
+  <!-- The session character of src/sprites.ts on a dark tile, one unit per cell,
+       so that it stays sharp down to 16 px. After a change, run
+       `pnpm tauri icon src-tauri/icons/icon.svg` and delete its android and ios
+       folders and 64x64.png, which the app does not use. -->
+  <path fill="#1f1e1d" d="M1 0h14v1h1v14h-1v1H1v-1H0V1h1z"/>
+  <path fill="#d97757" d="M4 4h8v6H4zM2 6h2v2H2zM12 6h2v2h-2zM4 10h1v2H4zM6 10h1v2H6zM9 10h1v2H9zM11 10h1v2h-1z"/>
+  <path fill="#1f1e1d" d="M6 6h1v2H6zM9 6h1v2H9z"/>
+</svg>
