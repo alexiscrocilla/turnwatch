@@ -16,8 +16,8 @@ use serde::de::{self, Deserialize, Deserializer, IgnoredAny, MapAccess, SeqAcces
 use serde_json::Value;
 
 use crate::model::{
-    ErrorMark, FindingsReport, PendingQuestion, PlanItem, PlanProgress, ToolActivity,
-    TranscriptInfo, TurnInfo, TurnOrigin,
+    BackgroundKind, BackgroundTask, ErrorMark, FindingsReport, PendingQuestion, PlanItem,
+    PlanProgress, ToolActivity, TranscriptInfo, TurnInfo, TurnOrigin,
 };
 
 /// Minimum delay between two searches for a transcript that was not found.
@@ -47,6 +47,11 @@ fn origin_rank(origin: TurnOrigin) -> u8 {
 }
 /// Tool calls without a result kept in memory; older ones are forgotten.
 const MAX_OPEN_TOOLS: usize = 64;
+/// Background tasks kept in memory; older ones are forgotten. Those of a
+/// process that died never report their end.
+const MAX_BACKGROUND: usize = 64;
+/// `taskType` of a workflow.
+const WORKFLOW_TASK_TYPE: &str = "local_workflow";
 /// Desktop keeps at most this many `update_plan` steps.
 const UPDATE_PLAN_MAX_ITEMS: usize = 12;
 /// Bytes read before deciding whether a line can be skipped.
@@ -329,6 +334,8 @@ struct TranscriptState {
     /// A `ReportFindings` call waiting for its result: kept only if accepted
     /// (the CLI rejects malformed findings).
     findings_call: Option<(String, FindingsReport)>,
+    /// Background work not reported as over, oldest first.
+    background: Vec<BackgroundTask>,
 }
 
 /// A tool call waiting for its result.
@@ -402,11 +409,16 @@ impl TranscriptState {
             "assistant" => self.apply_assistant(line, at),
             "user" => self.apply_user(line, at),
             "system" => self.apply_system(&line, at),
-            // The person wrote mid-turn: the review is no longer news. The
-            // message joins the running turn, so nothing else changes.
-            "attachment" if line.queued_human_prompt => {
-                self.findings = None;
-                self.findings_call = None;
+            "attachment" => {
+                if let Some(text) = &line.queued_notification {
+                    self.on_task_notification(text);
+                }
+                // The person wrote mid-turn: the review is no longer news. The
+                // message joins the running turn, so nothing else changes.
+                if line.queued_human_prompt {
+                    self.findings = None;
+                    self.findings_call = None;
+                }
             }
             _ => {}
         }
@@ -500,16 +512,99 @@ impl TranscriptState {
                 if block.kind.as_deref() == Some("tool_result")
                     && let Some(id) = block.tool_use_id.as_deref()
                 {
+                    if !block.is_error
+                        && let Some(outcome) = &line.tool_outcome
+                    {
+                        self.on_tool_outcome(id, outcome, at);
+                    }
                     self.on_tool_result(id, block.is_error);
                 }
             }
             return;
         }
         match classify_prompt(&line) {
-            Some(Prompt::Start(origin)) => self.start_turn(origin, at),
+            Some(Prompt::Start(origin)) => {
+                if origin == TurnOrigin::Task {
+                    match &line.content {
+                        Content::None => {}
+                        Content::Text(text) => self.on_task_notification(text),
+                        Content::Blocks(blocks) => {
+                            for text in blocks.iter().filter_map(|b| b.text.as_deref()) {
+                                self.on_task_notification(text);
+                            }
+                        }
+                    }
+                }
+                self.start_turn(origin, at);
+            }
             Some(Prompt::Interrupt) => self.end_turn(at),
             None => {}
         }
+    }
+
+    /// The background work a successful tool call started or stopped, told by
+    /// its result. Called while the call is still open.
+    fn on_tool_outcome(&mut self, id: &str, outcome: &ToolOutcome, at: Option<i64>) {
+        let Some(call) = self.open_tools.iter().find(|t| t.id == id) else {
+            return;
+        };
+        let summary = call.activity.summary.clone();
+        let (kind, task_id, ends_at) = match call.activity.name.as_str() {
+            "TaskStop" => {
+                if let Some(task) = &outcome.task_id {
+                    self.background.retain(|t| t.id != *task);
+                }
+                return;
+            }
+            // One wake-up at a time; `scheduledFor` 0 when the loop stopped.
+            "ScheduleWakeup" => {
+                self.background.retain(|t| t.kind != BackgroundKind::Wakeup);
+                let Some(due) = outcome.scheduled_for.filter(|due| *due > 0) else {
+                    return;
+                };
+                (BackgroundKind::Wakeup, "wakeup".to_owned(), Some(due))
+            }
+            "Monitor" => {
+                let Some(task) = outcome.task_id.clone() else {
+                    return;
+                };
+                let ends_at = at.zip(outcome.timeout_ms).map(|(at, ms)| at.saturating_add(ms));
+                (BackgroundKind::Monitor, task, ends_at)
+            }
+            _ => match (&outcome.background_task_id, outcome.status.as_deref()) {
+                (Some(task), _) => (BackgroundKind::Command, task.clone(), None),
+                (None, Some("async_launched")) => {
+                    let Some(task) = outcome.agent_id.clone().or_else(|| outcome.task_id.clone())
+                    else {
+                        return;
+                    };
+                    let kind = if outcome.task_type.as_deref() == Some(WORKFLOW_TASK_TYPE) {
+                        BackgroundKind::Workflow
+                    } else {
+                        BackgroundKind::Agent
+                    };
+                    (kind, task, None)
+                }
+                _ => return,
+            },
+        };
+        self.background.retain(|t| t.id != task_id);
+        self.background.push(BackgroundTask {
+            id: task_id,
+            kind,
+            summary,
+            started_at: at,
+            ends_at,
+        });
+        if self.background.len() > MAX_BACKGROUND {
+            self.background.remove(0);
+        }
+    }
+
+    /// The tasks a `<task-notification>` text reports as over are done.
+    fn on_task_notification(&mut self, text: &str) {
+        let ended = ended_task_ids(text);
+        self.background.retain(|t| !ended.contains(&t.id.as_str()));
     }
 
     fn apply_system(&mut self, line: &Line, at: Option<i64>) {
@@ -520,6 +615,10 @@ impl TranscriptState {
 
     fn start_turn(&mut self, origin: TurnOrigin, at: Option<i64>) {
         self.open_tools.clear();
+        // A wake-up that came due started this turn.
+        self.background.retain(|t| {
+            t.kind != BackgroundKind::Wakeup || t.ends_at.zip(at).is_none_or(|(due, at)| due > at)
+        });
         match self.turn.as_mut() {
             // Prompts delivered together (a task notification and a peer
             // message in the same instant) make one turn; the person's, or
@@ -850,8 +949,30 @@ impl TranscriptState {
             pending_ask: self.pending_ask.clone(),
             api_error: self.api_error.as_ref().map(|(error, _)| error.clone()),
             findings: self.findings.clone(),
+            background: self.background.clone(),
         }
     }
+}
+
+/// Ids of the tasks a `<task-notification>` text reports as over: those of
+/// the blocks with a `<status>`. A monitor's events have none.
+fn ended_task_ids(text: &str) -> Vec<&str> {
+    text.split("<task-notification>")
+        .skip(1)
+        .filter_map(|block| {
+            let block = block.split("</task-notification>").next()?;
+            tag_text(block, "status")?;
+            tag_text(block, "task-id")
+        })
+        .collect()
+}
+
+/// The text inside the first `<name>…</name>` of `xml`.
+fn tag_text<'a>(xml: &'a str, name: &str) -> Option<&'a str> {
+    let open = format!("<{name}>");
+    let close = format!("</{name}>");
+    let rest = &xml[xml.find(&open)? + open.len()..];
+    Some(rest[..rest.find(&close)?].trim())
 }
 
 /// The CLI tool that reports a code review's findings.
@@ -1342,6 +1463,7 @@ pub fn summarize_tool(name: &str, input: &serde_json::Value) -> String {
         "wrap_up" => return plain_text(&first_str(input, &["recap", "ask"]), SUMMARY_MAX),
         "Bash" | "PowerShell" => shell_summary(input),
         "Monitor" => first_str(input, &["description", "command"]),
+        "ScheduleWakeup" => first_str(input, &["reason", "prompt"]),
         "Read" | "Edit" | "Write" | "MultiEdit" => {
             str_field(input, "file_path").map(file_name).unwrap_or_default().to_owned()
         }
@@ -1922,6 +2044,26 @@ struct Line {
     error: Option<String>,
     /// An attachment line holding a message the person sent mid-turn.
     queued_human_prompt: bool,
+    /// Text of an attachment line holding a task notification the running
+    /// turn took in.
+    queued_notification: Option<String>,
+    /// `toolUseResult` of a tool result line.
+    tool_outcome: Option<ToolOutcome>,
+}
+
+/// The fields of a `toolUseResult` that tell about background work.
+#[derive(Debug, Default)]
+struct ToolOutcome {
+    /// `backgroundTaskId`: a shell command now runs in the background.
+    background_task_id: Option<String>,
+    /// "async_launched" for an agent or a workflow started in the background.
+    status: Option<String>,
+    /// `taskId`, or `task_id` in a `TaskStop` result.
+    task_id: Option<String>,
+    agent_id: Option<String>,
+    task_type: Option<String>,
+    timeout_ms: Option<i64>,
+    scheduled_for: Option<i64>,
 }
 
 /// `message.content`: a plain string or a list of blocks.
@@ -1968,6 +2110,14 @@ enum Field {
     IsApiErrorMessage,
     Error,
     Attachment,
+    ToolUseResult,
+    BackgroundTaskId,
+    Status,
+    TaskId,
+    AgentId,
+    TaskType,
+    TimeoutMs,
+    ScheduledFor,
     Other,
 }
 
@@ -2002,6 +2152,14 @@ impl<'de> Deserialize<'de> for Field {
                     "isApiErrorMessage" => Field::IsApiErrorMessage,
                     "error" => Field::Error,
                     "attachment" => Field::Attachment,
+                    "toolUseResult" => Field::ToolUseResult,
+                    "backgroundTaskId" => Field::BackgroundTaskId,
+                    "status" => Field::Status,
+                    "taskId" | "task_id" => Field::TaskId,
+                    "agentId" => Field::AgentId,
+                    "taskType" => Field::TaskType,
+                    "timeoutMs" => Field::TimeoutMs,
+                    "scheduledFor" => Field::ScheduledFor,
                     _ => Field::Other,
                 })
             }
@@ -2101,8 +2259,11 @@ impl<'de> Deserialize<'de> for Line {
                         Field::IsApiErrorMessage => line.is_api_error = is_true(map.next_value()?),
                         Field::Error => line.error = into_string(map.next_value()?),
                         Field::Attachment => {
-                            line.queued_human_prompt = is_queued_human_prompt(&map.next_value()?);
+                            let attachment = map.next_value()?;
+                            line.queued_human_prompt = is_queued_human_prompt(&attachment);
+                            line.queued_notification = queued_notification(&attachment);
                         }
+                        Field::ToolUseResult => line.tool_outcome = Some(map.next_value()?),
                         _ => {
                             map.next_value::<IgnoredAny>()?;
                         }
@@ -2131,6 +2292,53 @@ fn is_queued_human_prompt(attachment: &Value) -> bool {
     field("type") == Some("queued_command")
         && field("commandMode").is_none_or(|mode| mode == "prompt")
         && origin.is_none_or(|kind| kind == "human")
+}
+
+/// Text of an `attachment` holding a task notification: the CLI files it as
+/// `{"type":"queued_command","commandMode":"task-notification","prompt":…}`.
+fn queued_notification(attachment: &Value) -> Option<String> {
+    let field = |key: &str| attachment.get(key).and_then(Value::as_str);
+    let queued = field("type") == Some("queued_command")
+        && field("commandMode") == Some("task-notification");
+    field("prompt").filter(|_| queued).map(str::to_owned)
+}
+
+impl<'de> Deserialize<'de> for ToolOutcome {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct OutcomeVisitor;
+        impl<'de> Visitor<'de> for OutcomeVisitor {
+            type Value = ToolOutcome;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a tool result object")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<ToolOutcome, A::Error> {
+                let mut outcome = ToolOutcome::default();
+                while let Some(key) = map.next_key::<Field>()? {
+                    match key {
+                        Field::BackgroundTaskId => {
+                            outcome.background_task_id = into_string(map.next_value()?);
+                        }
+                        Field::Status => outcome.status = into_string(map.next_value()?),
+                        Field::TaskId => outcome.task_id = into_string(map.next_value()?),
+                        Field::AgentId => outcome.agent_id = into_string(map.next_value()?),
+                        Field::TaskType => outcome.task_type = into_string(map.next_value()?),
+                        Field::TimeoutMs => {
+                            outcome.timeout_ms = map.next_value::<Value>()?.as_i64();
+                        }
+                        Field::ScheduledFor => {
+                            outcome.scheduled_for = map.next_value::<Value>()?.as_i64();
+                        }
+                        _ => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(outcome)
+            }
+            discard!('de: scalars str seq);
+        }
+        deserializer.deserialize_any(OutcomeVisitor)
+    }
 }
 
 /// The `content` and `id` of a `message` object.
@@ -2347,6 +2555,238 @@ mod tests {
         ];
         let tool = info_of(&lines.join("\n")).current_tool.expect("waiting call");
         assert_eq!((tool.name.as_str(), tool.summary.as_str()), ("ExitPlanMode", "migrer le cache"));
+    }
+
+    // --- background work ---------------------------------------------------
+
+    /// A tool call and its accepted result, carrying `outcome` as `toolUseResult`.
+    fn background_call(id: &str, name: &str, input: Value, outcome: Value, ts: &str) -> [String; 2] {
+        let mut result: Value = serde_json::from_str(&tool_result(id, false, ts)).expect("line");
+        result["toolUseResult"] = outcome;
+        [assistant_tool(id, name, input, ts), result.to_string()]
+    }
+
+    fn notification(id: &str, status: Option<&str>) -> String {
+        let status = status.map(|s| format!("<status>{s}</status>\n")).unwrap_or_default();
+        format!("<task-notification>\n<task-id>{id}</task-id>\n{status}<summary>s</summary>\n</task-notification>")
+    }
+
+    /// Notification of a task that ended, as a turn of its own.
+    fn task_ended(id: &str, ts: &str) -> String {
+        prompt(&notification(id, Some("completed")), Some("task-notification"), ts)
+    }
+
+    fn running(lines: &[String]) -> Vec<(String, BackgroundKind)> {
+        let info = info_of(&lines.join("\n"));
+        info.background.into_iter().map(|t| (t.id, t.kind)).collect()
+    }
+
+    #[test]
+    fn a_background_command_runs_until_its_notification() {
+        let mut lines = vec![prompt("Lance les tests", None, &at(1))];
+        lines.extend(background_call(
+            "toolu_b",
+            "Bash",
+            json!({"command": "cargo test", "run_in_background": true}),
+            json!({"stdout": "", "interrupted": false, "backgroundTaskId": "bahc5gyia"}),
+            &at(2),
+        ));
+        lines.push(stop(&at(3)));
+        let info = info_of(&lines.join("\n"));
+        assert!(info.turn.is_some_and(|t| t.ended));
+        assert_eq!(
+            info.background,
+            [BackgroundTask {
+                id: "bahc5gyia".to_owned(),
+                kind: BackgroundKind::Command,
+                summary: "cargo test".to_owned(),
+                started_at: parse_iso8601_ms(&at(2)),
+                ends_at: None,
+            }]
+        );
+        lines.push(task_ended("bahc5gyia", &at(4)));
+        assert_eq!(running(&lines), []);
+    }
+
+    #[test]
+    fn a_command_moved_to_the_background_at_its_timeout_counts_too() {
+        let mut lines = vec![prompt("Compile", None, &at(1))];
+        lines.extend(background_call(
+            "toolu_b",
+            "PowerShell",
+            json!({"command": "cargo build"}),
+            json!({"stdout": "", "backgroundTaskId": "bxr7c029v"}),
+            &at(2),
+        ));
+        assert_eq!(running(&lines), [("bxr7c029v".to_owned(), BackgroundKind::Command)]);
+    }
+
+    #[test]
+    fn agents_and_workflows_are_told_apart_by_their_result() {
+        let mut lines = vec![prompt("Lance", None, &at(1))];
+        lines.extend(background_call(
+            "toolu_a",
+            "Agent",
+            json!({"description": "Relire le code", "prompt": "…"}),
+            json!({"isAsync": true, "status": "async_launched", "agentId": "aded3757"}),
+            &at(2),
+        ));
+        lines.extend(background_call(
+            "toolu_w",
+            "Workflow",
+            json!({"description": "Audit"}),
+            json!({"status": "async_launched", "taskId": "wx0535tfy", "taskType": "local_workflow"}),
+            &at(3),
+        ));
+        // A foreground agent has finished when its result comes.
+        lines.extend(background_call(
+            "toolu_f",
+            "Agent",
+            json!({"description": "Chercher"}),
+            json!({"status": "completed", "agentId": "af00"}),
+            &at(4),
+        ));
+        assert_eq!(
+            running(&lines),
+            [
+                ("aded3757".to_owned(), BackgroundKind::Agent),
+                ("wx0535tfy".to_owned(), BackgroundKind::Workflow),
+            ]
+        );
+        let info = info_of(&lines.join("\n"));
+        assert_eq!(info.background[0].summary, "Relire le code");
+    }
+
+    #[test]
+    fn a_task_ends_with_any_status_and_however_its_notification_comes() {
+        let mut lines = vec![prompt("Lance", None, &at(1))];
+        for (n, id) in ["b1", "b2", "b3"].into_iter().enumerate() {
+            lines.extend(background_call(
+                &format!("toolu_{id}"),
+                "Bash",
+                json!({"command": id, "run_in_background": true}),
+                json!({"backgroundTaskId": id}),
+                &at(2 + n as u32),
+            ));
+        }
+        // Taken in by the running turn: no user line.
+        let queued = json!({
+            "parentUuid": "p", "isSidechain": false, "type": "attachment",
+            "attachment": {"type": "queued_command", "commandMode": "task-notification",
+                "prompt": notification("b1", Some("failed")),
+                "origin": {"kind": "task-notification"}},
+            "uuid": "q", "timestamp": at(6), "sessionId": SESSION
+        });
+        lines.push(queued.to_string());
+        assert_eq!(running(&lines).len(), 2);
+        // Older CLIs have no `origin`.
+        lines.push(prompt(&notification("b2", Some("killed")), None, &at(7)));
+        assert_eq!(running(&lines), [("b3".to_owned(), BackgroundKind::Command)]);
+        // Several at once, in the blocks of one line.
+        let mut together: Value = serde_json::from_str(&prompt("", Some("task-notification"), &at(8)))
+            .expect("line");
+        together["message"]["content"] = json!([
+            {"type": "text", "text": notification("x", Some("completed"))},
+            {"type": "text", "text": notification("b3", Some("stopped"))},
+        ]);
+        lines.push(together.to_string());
+        assert_eq!(running(&lines), []);
+    }
+
+    #[test]
+    fn a_monitor_outlives_its_events_until_its_end() {
+        let mut lines = vec![prompt("Surveille", None, &at(1))];
+        lines.extend(background_call(
+            "toolu_m",
+            "Monitor",
+            json!({"description": "erreurs du déploiement", "timeout_ms": 300_000}),
+            json!({"taskId": "bcsd9ddo0", "timeoutMs": 300_000, "persistent": false}),
+            &at(2),
+        ));
+        lines.push(stop(&at(3)));
+        lines.push(prompt(&notification("bcsd9ddo0", None), Some("task-notification"), &at(4)));
+        let info = info_of(&lines.join("\n"));
+        assert_eq!(info.background.len(), 1);
+        assert_eq!(info.background[0].kind, BackgroundKind::Monitor);
+        assert_eq!(info.background[0].summary, "erreurs du déploiement");
+        assert_eq!(info.background[0].ends_at, parse_iso8601_ms(&at(2)).map(|t| t + 300_000));
+        lines.push(task_ended("bcsd9ddo0", &at(5)));
+        assert_eq!(running(&lines), []);
+    }
+
+    #[test]
+    fn stopped_or_refused_work_does_not_run() {
+        let mut lines = vec![prompt("Lance", None, &at(1))];
+        lines.extend(background_call(
+            "toolu_b",
+            "Bash",
+            json!({"command": "x", "run_in_background": true}),
+            json!({"backgroundTaskId": "b1"}),
+            &at(2),
+        ));
+        // TaskStop sends no notification.
+        lines.extend(background_call(
+            "toolu_s",
+            "TaskStop",
+            json!({"task_id": "b1"}),
+            json!({"message": "Successfully stopped task", "task_id": "b1", "task_type": "local_bash"}),
+            &at(3),
+        ));
+        assert_eq!(running(&lines), []);
+        // Refused: its result is an error.
+        lines.push(assistant_tool("toolu_r", "Bash", json!({"command": "y"}), &at(4)));
+        let mut refused: Value =
+            serde_json::from_str(&tool_result("toolu_r", true, &at(5))).expect("line");
+        refused["toolUseResult"] = json!({"backgroundTaskId": "b2"});
+        lines.push(refused.to_string());
+        assert_eq!(running(&lines), []);
+    }
+
+    #[test]
+    fn a_wake_up_runs_until_it_starts_a_turn_or_is_cancelled() {
+        let due = parse_iso8601_ms(&at(30)).expect("time");
+        let mut lines = vec![prompt("Boucle", None, &at(1))];
+        lines.extend(background_call(
+            "toolu_w",
+            "ScheduleWakeup",
+            json!({"delaySeconds": 1500, "reason": "attendre la CI", "prompt": "/loop"}),
+            json!({"scheduledFor": due, "clampedDelaySeconds": 1500, "wasClamped": false}),
+            &at(2),
+        ));
+        lines.push(stop(&at(3)));
+        let info = info_of(&lines.join("\n"));
+        assert_eq!(info.background.len(), 1);
+        assert_eq!(info.background[0].kind, BackgroundKind::Wakeup);
+        assert_eq!(info.background[0].ends_at, Some(due));
+        assert_eq!(info.background[0].summary, "attendre la CI");
+
+        // The person's message does not cancel it; the turn it starts does.
+        lines.push(prompt("Où en es-tu ?", None, &at(4)));
+        assert_eq!(running(&lines).len(), 1);
+        let mut fired = lines.clone();
+        fired.push(prompt("/loop", None, &at(30)));
+        assert_eq!(running(&fired), []);
+
+        // Stopping the loop cancels it.
+        lines.extend(background_call(
+            "toolu_x",
+            "ScheduleWakeup",
+            json!({"stop": true}),
+            json!({"scheduledFor": 0, "clampedDelaySeconds": 0, "stopped": true}),
+            &at(5),
+        ));
+        assert_eq!(running(&lines), []);
+    }
+
+    #[test]
+    fn a_tool_result_of_another_shape_is_read_as_usual() {
+        for outcome in [json!("Error: refusé"), json!([{"type": "text", "text": "x"}]), json!(7)] {
+            let mut lines = vec![prompt("Lance", None, &at(1))];
+            lines.extend(background_call("toolu_b", "Bash", json!({"command": "x"}), outcome, &at(2)));
+            let info = info_of(&lines.join("\n"));
+            assert_eq!(info.background, []);
+            assert_eq!(info.current_tool, None, "the result closed the call");
+        }
     }
 
     /// `2026-10-22T10:00:<seconds>Z`.
@@ -3691,14 +4131,10 @@ mod tests {
         }
     }
 
-    /// Replays every real transcript modified in the last 30 days and checks
-    /// the rebuilt plan against Desktop's own answers. Read-only:
-    /// `cargo test --release live_plan_consistency -- --ignored --nocapture`.
-    #[test]
-    #[ignore = "reads the live ~/.claude folder"]
-    fn live_plan_consistency() {
+    /// Calls `visit` with the name and text of every real transcript modified
+    /// in the last 30 days.
+    fn for_each_recent_transcript(mut visit: impl FnMut(&str, &str)) {
         let since = SystemTime::now() - Duration::from_secs(30 * 86_400);
-        let mut tally = Tally::default();
         let projects = fs::read_dir(crate::paths::projects_dir()).into_iter().flatten();
         for project in projects.flatten() {
             for file in fs::read_dir(project.path()).into_iter().flatten().flatten() {
@@ -3710,10 +4146,38 @@ mod tests {
                     continue;
                 }
                 let Ok(text) = fs::read_to_string(&path) else { continue };
-                let name = file.file_name().to_string_lossy().into_owned();
-                check_plan_answers(&name, &text, &mut tally);
+                visit(&file.file_name().to_string_lossy(), &text);
             }
         }
+    }
+
+    /// Replays every real transcript modified in the last 30 days and lists
+    /// the background work that never reported its end: normally only what a
+    /// dead process took with it. Read-only:
+    /// `cargo test --release live_background_ends -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "reads the live ~/.claude folder"]
+    fn live_background_ends() {
+        let (mut transcripts, mut left) = (0, 0);
+        for_each_recent_transcript(|name, text| {
+            transcripts += 1;
+            for task in state_from(text).info(Path::new(name)).background {
+                left += 1;
+                println!("{name}: {:?} {} {}", task.kind, task.id, task.summary);
+            }
+        });
+        println!("{transcripts} transcripts, {left} tasks without an end");
+        assert!(left < transcripts, "ends are being missed");
+    }
+
+    /// Replays every real transcript modified in the last 30 days and checks
+    /// the rebuilt plan against Desktop's own answers. Read-only:
+    /// `cargo test --release live_plan_consistency -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "reads the live ~/.claude folder"]
+    fn live_plan_consistency() {
+        let mut tally = Tally::default();
+        for_each_recent_transcript(|name, text| check_plan_answers(name, text, &mut tally));
         println!(
             "checked {} answers, {} mismatches, {} unparsed",
             tally.checked, tally.mismatches, tally.unparsed

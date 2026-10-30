@@ -376,6 +376,7 @@ function session(seed: Seed): SessionView {
     lastError: null,
     version: "2.1.308",
     findings: null,
+    background: null,
     ...seed,
   };
 }
@@ -516,7 +517,8 @@ function initialSessions(): SessionView[] {
       worktree: "eager-lovelace-7f3a",
       state: "working",
       stateSince: ago(3 * 60),
-      activity: act("Grep", '"<Pagination" src/ --type ts', 1),
+      activity: act("Bash", "pnpm test --filter search", 40),
+      background: { kind: "command", summary: "pnpm test --filter search", count: 1, endsAt: null },
       git: git("atlas-web", "claude/search-pagination", 0),
       pr: pr("exemple/atlas-web", 128, "Pagination des résultats de recherche", {
         checks: "pending",

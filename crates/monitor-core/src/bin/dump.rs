@@ -242,8 +242,18 @@ fn session_line(s: &SessionView) -> String {
     let m = &s.messages;
     let screen = if s.on_screen { " | à l'écran" } else { "" };
     let stopped = if s.stopped { " | arrêtée" } else { "" };
+    let background = match &s.background {
+        Some(wait) => {
+            let kind = serde_json::to_value(wait.kind)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .unwrap_or_default();
+            format!(" | attend {kind} « {} » ({})", shorten(&wait.summary, 60), wait.count)
+        }
+        None => String::new(),
+    };
     format!(
-        "{:<7} | {} | {place} | {waiting} | {plan} | {activity} | {pr} | msg attente {} · non livrés {} · non lus {}{stopped}{screen}",
+        "{:<7} | {} | {place} | {waiting} | {plan} | {activity} | {pr} | msg attente {} · non livrés {} · non lus {}{background}{stopped}{screen}",
         state_name(s.state),
         s.title,
         m.awaiting_reply.len(),

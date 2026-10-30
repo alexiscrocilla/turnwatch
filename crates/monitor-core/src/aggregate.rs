@@ -5,10 +5,10 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
 use crate::model::{
-    ChecksState, Counts, DesktopSession, ErrorMark, GitInfo, MessageSummary, PeerLink,
-    PeerReceipt, PendingQuestion, PrInfo, ProposedTask, RegistryEntry, SessionRef, SessionState,
-    SessionView, Settings, Snapshot, SourceHealth, TaskSuggestion, ToolActivity, TranscriptInfo,
-    Transition, TurnOrigin,
+    BackgroundKind, BackgroundTask, BackgroundWait, ChecksState, Counts, DesktopSession,
+    ErrorMark, GitInfo, MessageSummary, PeerLink, PeerReceipt, PendingQuestion, PrInfo,
+    ProposedTask, RegistryEntry, SessionRef, SessionState, SessionView, Settings, Snapshot,
+    SourceHealth, TaskSuggestion, ToolActivity, TranscriptInfo, Transition, TurnOrigin,
 };
 use crate::transcript::plain_text;
 
@@ -58,6 +58,16 @@ const NEW_TURN_SLACK_MS: i64 = 1_000;
 /// How long a question found only in the text waits for Desktop's own
 /// verdict on the turn, when Desktop writes one.
 const CLASSIFIER_GRACE_MS: i64 = 20_000;
+/// A background command stops being waited for after this long: it is most
+/// likely a server left running. Of 520 commands measured, 3 ran over two
+/// hours.
+const COMMAND_WAIT_MS: i64 = 2 * MS_PER_HOUR;
+/// Longest wait for other background work, should its end go unreported.
+/// The longest workflow measured ran for 22 hours.
+const BACKGROUND_WAIT_MS: i64 = 24 * MS_PER_HOUR;
+/// Work with an end of its own still counts this long after it, the margin
+/// Desktop gives its wake-ups.
+const BACKGROUND_END_GRACE_MS: i64 = 120_000;
 /// `waiting_for` of a turn that ended on an explicit question.
 pub const WAITING_DECISION: &str = "decision";
 /// `waiting_for` of a turn whose last message ends with a question mark.
@@ -112,6 +122,7 @@ pub fn build_snapshot(input: &AggregateInput) -> Snapshot {
         .filter(|view| needs_person(view.state));
     let mut sessions: Vec<SessionView> = live_views.chain(stopped_views).collect();
     nest_families(&mut sessions, input.desktop);
+    wait_for_side_sessions(&mut sessions, input.desktop);
     sort_sessions(&mut sessions);
     let counts = count_sessions(&sessions);
     let proposed_tasks = proposed_tasks(input, &sessions);
@@ -257,6 +268,8 @@ pub struct StateInput<'a> {
     pub turn_ended_at: Option<i64>,
     /// No process runs the session: Desktop stopped it.
     pub stopped: bool,
+    /// When the process running the session started.
+    pub process_started_at: Option<i64>,
 }
 
 /// The state of one session and what explains it.
@@ -270,6 +283,8 @@ pub struct DerivedState {
     pub since: Option<i64>,
     /// Label of the error, in the Error state.
     pub error: Option<String>,
+    /// What a Working session waits for, when no turn runs.
+    pub background: Option<BackgroundWait>,
 }
 
 /// State of one session, in this order:
@@ -278,17 +293,18 @@ pub struct DerivedState {
 ///    "offer". The registry shows such a session busy (its tool call blocks).
 /// 1. Registry "waiting" (permission, question tool, dialog): Waiting, with
 ///    the registry's reason ([`registry_reason`]: "plan approval" for a plan).
-/// 2. Registry "busy" while a turn runs: Working. The registry also stays
-///    busy while background tasks outlive the turn; the turn counts as over
-///    when the transcript ended it and the registry did not go busy again
-///    after that.
+/// 2. Registry "busy" while a turn runs: Working. The registry can stay busy
+///    after the turn; the turn counts as over when the transcript ended it
+///    and the registry did not go busy again after that.
 /// 3. Turn over, registry not busy: Error when the turn ended on an error
 ///    the person has not answered ([`turn_error`]).
 /// 4. Turn over: Waiting when it left a question the person has not
 ///    answered ([`pending_question`]): "decision" for an explicit question,
 ///    "probable question" for a last message ending with "?". Focus, acks
 ///    and the window do not clear it; only the person's next message does.
-/// 5. Registry still busy (background work): Working.
+/// 5. Registry still busy, or background work the session waits for
+///    ([`background_wait`]; the registry goes "idle" at the end of the turn
+///    whatever still runs): Working, from the start of that turn.
 /// 6. Unseen when the turn ended after both the last focus in Desktop and
 ///    the acknowledgement ([`finished_edge`]); else Idle.
 pub fn derive_state(input: &StateInput) -> DerivedState {
@@ -342,8 +358,14 @@ pub fn derive_state(input: &StateInput) -> DerivedState {
             ..DerivedState::default()
         };
     }
-    if busy {
-        return working;
+    let background = background_wait(input);
+    if busy || background.is_some() {
+        let turn_start = input.transcript.and_then(|t| t.turn.as_ref()?.started_at);
+        return DerivedState {
+            since: if busy { status_since } else { turn_start.or(status_since) },
+            background,
+            ..working
+        };
     }
     let edge = finished_edge(input);
     let Some(desktop) = input.desktop else {
@@ -367,6 +389,47 @@ pub fn derive_state(input: &StateInput) -> DerivedState {
         },
         ..DerivedState::default()
     }
+}
+
+/// What the session waits for with no turn running: background work whose
+/// end will wake it up. When several run, one that does the work is named
+/// rather than a monitor or a wake-up. None for a stopped session.
+fn background_wait(input: &StateInput) -> Option<BackgroundWait> {
+    if input.stopped {
+        return None;
+    }
+    let tasks: Vec<&BackgroundTask> = input
+        .transcript?
+        .background
+        .iter()
+        .filter(|task| is_awaited(task, input))
+        .collect();
+    let main = tasks
+        .iter()
+        .rev()
+        .find(|task| !matches!(task.kind, BackgroundKind::Monitor | BackgroundKind::Wakeup))
+        .or(tasks.last())?;
+    Some(BackgroundWait {
+        kind: main.kind,
+        summary: main.summary.clone(),
+        count: u32::try_from(tasks.len()).unwrap_or(u32::MAX),
+        ends_at: main.ends_at,
+    })
+}
+
+/// A task still runs for all we know: the running process started it (work
+/// dies with its process, without a word), and it is neither past its own
+/// end nor older than its kind's limit.
+fn is_awaited(task: &BackgroundTask, input: &StateInput) -> bool {
+    let limit = match task.kind {
+        BackgroundKind::Command => COMMAND_WAIT_MS,
+        _ => BACKGROUND_WAIT_MS,
+    };
+    let now = input.now_ms;
+    let current = task.started_at.is_none_or(|at| {
+        now.saturating_sub(at) < limit && input.process_started_at.is_none_or(|start| at >= start)
+    });
+    current && task.ends_at.is_none_or(|end| now < end.saturating_add(BACKGROUND_END_GRACE_MS))
 }
 
 /// With the registry "busy": the transcript ended the latest turn, and
@@ -862,6 +925,7 @@ fn build_view(
         acked_at: input.acks.get(key).copied(),
         turn_ended_at: input.turn_ended_at.get(key).copied(),
         stopped,
+        process_started_at: entry.started_at,
     });
     let state = derived.state;
 
@@ -927,6 +991,7 @@ fn build_view(
         findings: transcript
             .and_then(|t| t.findings.clone())
             .filter(|f| f.open > 0),
+        background: derived.background,
     })
 }
 
@@ -1065,6 +1130,46 @@ fn listed_ancestor(
             return Some(parent.to_owned());
         }
         current = desktop.get(parent)?;
+    }
+}
+
+/// A live session whose turn is over stays Working while side sessions it
+/// started work: Desktop continues it once they are done. A side session
+/// waiting that way counts as working for its own parent.
+fn wait_for_side_sessions(sessions: &mut [SessionView], desktop: &HashMap<String, DesktopSession>) {
+    loop {
+        let mut working: HashMap<String, Vec<String>> = HashMap::new();
+        for view in sessions.iter().filter(|s| s.state == SessionState::Working) {
+            let parent = view
+                .host_session_id
+                .as_deref()
+                .and_then(|id| desktop.get(id))
+                .filter(|d| d.side_session && !d.lineage_detached)
+                .and_then(|d| d.spawned_from.as_ref());
+            if let Some(parent) = parent {
+                working
+                    .entry(parent.host_session_id.trim().to_owned())
+                    .or_default()
+                    .push(view.title.clone());
+            }
+        }
+        let mut changed = false;
+        for view in sessions.iter_mut() {
+            let over = matches!(view.state, SessionState::Idle | SessionState::Unseen);
+            if let Some(titles) = working.get(&view.key).filter(|_| over && !view.stopped) {
+                view.state = SessionState::Working;
+                view.background = Some(BackgroundWait {
+                    kind: BackgroundKind::Sessions,
+                    summary: titles.first().cloned().unwrap_or_default(),
+                    count: u32::try_from(titles.len()).unwrap_or(u32::MAX),
+                    ends_at: None,
+                });
+                changed = true;
+            }
+        }
+        if !changed {
+            return;
+        }
     }
 }
 
@@ -1794,6 +1899,217 @@ mod tests {
         });
         assert_eq!(d.state, Waiting);
         assert_eq!(d.since, Some(NOW - 10 * MIN - 5_000), "same episode");
+    }
+
+    // --- background work ---------------------------------------------------
+
+    fn task(kind: BackgroundKind, summary: &str, started_at: i64) -> BackgroundTask {
+        BackgroundTask {
+            id: format!("task-{summary}"),
+            kind,
+            summary: summary.to_owned(),
+            started_at: Some(started_at),
+            ends_at: None,
+        }
+    }
+
+    /// A turn that ended ten minutes ago, leaving `tasks` behind.
+    fn left_running(tasks: Vec<BackgroundTask>) -> TranscriptInfo {
+        TranscriptInfo {
+            background: tasks,
+            ..turn(TurnOrigin::Human, NOW - 20 * MIN, Some(NOW - 10 * MIN))
+        }
+    }
+
+    fn after_turn(transcript: &TranscriptInfo) -> StateInput<'_> {
+        StateInput {
+            transcript: Some(transcript),
+            status_since: Some(NOW - 10 * MIN),
+            ..input("idle")
+        }
+    }
+
+    #[test]
+    fn work_left_running_keeps_an_idle_session_working() {
+        let transcript = left_running(vec![task(BackgroundKind::Command, "cargo test", NOW - 11 * MIN)]);
+        let desktop = DesktopSession {
+            last_turn_edge_at: Some(NOW - 10 * MIN),
+            last_focused_at: Some(NOW - 5 * MIN),
+            ..desk("local_a")
+        };
+        let d = derive_state(&StateInput {
+            desktop: Some(&desktop),
+            ..after_turn(&transcript)
+        });
+        assert_eq!(d.state, Working);
+        assert_eq!(d.since, Some(NOW - 20 * MIN), "the turn's work goes on");
+        assert_eq!(
+            d.background,
+            Some(BackgroundWait {
+                kind: BackgroundKind::Command,
+                summary: "cargo test".to_owned(),
+                count: 1,
+                ends_at: None,
+            })
+        );
+
+        // Once it ended, the session is what it was.
+        let over = left_running(Vec::new());
+        let d = derive_state(&StateInput {
+            desktop: Some(&desktop),
+            ..after_turn(&over)
+        });
+        assert_eq!(d.state, Idle);
+        assert_eq!(d.background, None);
+    }
+
+    #[test]
+    fn work_left_running_does_not_hide_what_needs_the_person() {
+        let tasks = vec![task(BackgroundKind::Workflow, "audit", NOW - 11 * MIN)];
+        let mut transcript = asked();
+        transcript.background = tasks.clone();
+        let d = derive_state(&after_turn(&transcript));
+        assert_eq!(d.state, Waiting);
+        assert_eq!(d.background, None);
+
+        let failed = TranscriptInfo {
+            api_error: Some(ErrorMark {
+                at: Some(NOW - 10 * MIN),
+                label: Some("rate_limit".to_owned()),
+            }),
+            ..left_running(tasks)
+        };
+        let d = derive_state(&after_turn(&failed));
+        assert_eq!(d.state, Error);
+        assert_eq!(d.background, None);
+    }
+
+    #[test]
+    fn work_dies_with_its_process() {
+        let transcript = left_running(vec![task(BackgroundKind::Agent, "relecture", NOW - 11 * MIN)]);
+        let same_process = StateInput {
+            process_started_at: Some(NOW - HOUR),
+            ..after_turn(&transcript)
+        };
+        assert_eq!(derive_state(&same_process).state, Working);
+        let restarted = StateInput {
+            process_started_at: Some(NOW - 5 * MIN),
+            ..same_process
+        };
+        assert_ne!(derive_state(&restarted).state, Working);
+        let stopped = StateInput {
+            stopped: true,
+            ..same_process
+        };
+        assert_ne!(derive_state(&stopped).state, Working);
+    }
+
+    #[test]
+    fn work_is_waited_for_within_limits() {
+        let state = |task: BackgroundTask| {
+            let transcript = left_running(vec![task]);
+            derive_state(&after_turn(&transcript)).state
+        };
+        // A command that long is a server left running.
+        assert_eq!(state(task(BackgroundKind::Command, "dev", NOW - 119 * MIN)), Working);
+        assert_ne!(state(task(BackgroundKind::Command, "dev", NOW - 121 * MIN)), Working);
+        // A workflow can take most of a day.
+        assert_eq!(state(task(BackgroundKind::Workflow, "audit", NOW - 22 * HOUR)), Working);
+        assert_ne!(state(task(BackgroundKind::Workflow, "audit", NOW - 25 * HOUR)), Working);
+        // Work with an end of its own stops a little after it.
+        let timed = |ends_at: i64| BackgroundTask {
+            ends_at: Some(ends_at),
+            ..task(BackgroundKind::Wakeup, "CI", NOW - 11 * MIN)
+        };
+        assert_eq!(state(timed(NOW + 15 * MIN)), Working);
+        assert_eq!(state(timed(NOW - MIN)), Working);
+        assert_ne!(state(timed(NOW - 3 * MIN)), Working);
+    }
+
+    #[test]
+    fn the_work_named_is_the_one_doing_it() {
+        let transcript = left_running(vec![
+            task(BackgroundKind::Command, "cargo test", NOW - 12 * MIN),
+            task(BackgroundKind::Agent, "relecture", NOW - 11 * MIN),
+            task(BackgroundKind::Monitor, "logs", NOW - 10 * MIN),
+        ]);
+        let wait = derive_state(&after_turn(&transcript)).background.expect("wait");
+        assert_eq!((wait.kind, wait.summary.as_str(), wait.count), (BackgroundKind::Agent, "relecture", 3));
+        let watching = left_running(vec![task(BackgroundKind::Monitor, "logs", NOW - 10 * MIN)]);
+        let wait = derive_state(&after_turn(&watching)).background.expect("wait");
+        assert_eq!((wait.kind, wait.count), (BackgroundKind::Monitor, 1));
+    }
+
+    #[test]
+    fn a_session_waits_for_the_side_sessions_it_started() {
+        let side = |host: &str, parent: &str| DesktopSession {
+            spawned_from: Some(SessionRef {
+                host_session_id: parent.to_owned(),
+                title: None,
+            }),
+            side_session: true,
+            ..desk(host)
+        };
+        let state_of = |f: &Fixture, key: &str| {
+            let snapshot = f.snapshot();
+            let view = snapshot.sessions.iter().find(|s| s.key == key).expect("listed");
+            (view.state, view.background.clone())
+        };
+        let mut f = Fixture::new();
+        f.live(entry(1, "local_root"))
+            .file(desk("local_root"))
+            .live(entry(2, "local_mid"))
+            .file(side("local_mid", "local_root"))
+            .live(with_status(entry(3, "local_leaf"), "busy"))
+            .file(side("local_leaf", "local_mid"));
+
+        // Up the whole chain: the leaf works, so the middle waits, so the root.
+        let (state, wait) = state_of(&f, "local_mid");
+        assert_eq!(state, Working);
+        let wait = wait.expect("wait");
+        assert_eq!((wait.kind, wait.summary.as_str(), wait.count), (BackgroundKind::Sessions, "Desktop local_leaf", 1));
+        assert_eq!(state_of(&f, "local_root").0, Working);
+        assert_eq!(f.snapshot().counts.working, 3);
+
+        // A side session waiting for the person holds nobody up.
+        f.registry[2] = with_status(entry(3, "local_leaf"), "waiting");
+        assert_eq!(state_of(&f, "local_mid"), (Idle, None));
+        assert_eq!(state_of(&f, "local_root"), (Idle, None));
+
+        // A session detached from its parent, or started from a "New task"
+        // card, reports to nobody.
+        f.registry[2] = with_status(entry(3, "local_leaf"), "busy");
+        f.file(DesktopSession {
+            lineage_detached: true,
+            ..side("local_leaf", "local_mid")
+        });
+        assert_eq!(state_of(&f, "local_mid").0, Idle);
+        f.file(DesktopSession {
+            side_session: false,
+            ..side("local_leaf", "local_mid")
+        });
+        assert_eq!(state_of(&f, "local_mid").0, Idle);
+    }
+
+    #[test]
+    fn a_snapshot_counts_a_session_waiting_for_its_work_as_working() {
+        let mut f = Fixture::new();
+        f.live(entry(1, "local_a")).file(desk("local_a"));
+        f.transcripts.insert(
+            "cli-1".to_owned(),
+            left_running(vec![task(BackgroundKind::Command, "cargo test", NOW - 11 * MIN)]),
+        );
+        let snapshot = f.snapshot();
+        assert_eq!(snapshot.counts.working, 1);
+        assert_eq!(snapshot.sessions[0].state, Working);
+        assert_eq!(
+            snapshot.sessions[0].background.as_ref().map(|w| w.summary.as_str()),
+            Some("cargo test")
+        );
+
+        // The process that ran it is gone, a new one took the same transcript.
+        f.registry[0].started_at = Some(NOW - MIN);
+        assert_eq!(f.snapshot().sessions[0].state, Idle);
     }
 
     #[test]

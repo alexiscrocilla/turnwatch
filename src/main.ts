@@ -7,6 +7,8 @@ import { paintSprite, propOf } from "./sprites";
 import type { Prop } from "./sprites";
 import { CMD, EVENT_SETTINGS, EVENT_SNAPSHOT, EVENT_VISIBILITY } from "./types";
 import type {
+  BackgroundKind,
+  BackgroundWait,
   Counts,
   FindingsReport,
   PeerLink,
@@ -288,6 +290,16 @@ function sanitizeActivity(v: unknown): ToolActivity | null {
   return { name, summary: oneLine(isProseTool(name) ? plainText(summary) : summary), at: num(v.at) };
 }
 
+function sanitizeBackground(v: unknown): BackgroundWait | null {
+  if (!isObj(v) || typeof v.kind !== "string") return null;
+  return {
+    kind: v.kind as BackgroundKind,
+    summary: oneLine(str(v.summary)).trim(),
+    count: Math.max(num(v.count) ?? 1, 1),
+    endsAt: num(v.endsAt),
+  };
+}
+
 /** A review worth showing: some findings, some still open. */
 function sanitizeFindings(v: unknown): FindingsReport | null {
   if (!isObj(v)) return null;
@@ -330,6 +342,7 @@ function sanitizeSession(raw: unknown): SessionView | null {
       unreadInbound: peerLinks(messages.unreadInbound),
     },
     findings: sanitizeFindings(raw.findings),
+    background: sanitizeBackground(raw.background),
   };
 }
 
@@ -1893,6 +1906,22 @@ const peerName = (link: PeerLink): string => str(link.peerTitle).trim() || "sess
 const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
 const ERROR_FALLBACK = "Le dernier tour s'est terminé sur une erreur";
 
+const BACKGROUND_LABEL: Partial<Record<string, string>> = {
+  command: "Attend une commande",
+  agent: "Attend un agent",
+  workflow: "Attend un workflow",
+  monitor: "Surveille",
+};
+
+/** What a session waits for once its turn is over: "Attend une commande : cargo test". */
+function backgroundText(b: BackgroundWait): string {
+  const named = (label: string): string => (b.summary ? `${label} : ${b.summary}` : label);
+  if (b.kind === "sessions") return b.count > 1 ? `Attend ${b.count} sessions` : named("Attend une session");
+  if (b.count > 1) return named(`Attend ${b.count} tâches`);
+  if (b.kind === "wakeup") return named(b.endsAt !== null ? `Reprend à ${formatClock(b.endsAt)}` : "Reprendra");
+  return named(BACKGROUND_LABEL[b.kind] ?? "Attend une tâche");
+}
+
 /** Accessible name of a card's button: title, state and what it is about. */
 function cardName(s: SessionView): string {
   const parts = [s.title, STATE_LABEL[s.state]];
@@ -1903,7 +1932,8 @@ function cardName(s: SessionView): string {
       else if (s.activity && REASONS_WITH_TOOL.has(reasonKey(s.waitingFor))) parts.push(activityText(s.activity));
       break;
     case "working":
-      if (s.activity) parts.push(activityText(s.activity));
+      if (s.background) parts.push(backgroundText(s.background));
+      else if (s.activity) parts.push(activityText(s.activity));
       break;
     case "error":
       parts.push(s.lastError ?? ERROR_FALLBACK);
@@ -1958,6 +1988,7 @@ function cardTooltip(s: SessionView): string {
     }
   }
   if (s.state === "error" && s.lastError) lines.push(`Erreur : ${clip(s.lastError, 300)}`);
+  if (s.background) lines.push(clip(backgroundText(s.background), 300));
   if (s.findings) lines.push(findingsText(s.findings));
   const branch = str(s.git?.branch).trim();
   const worktree = str(s.worktree).trim();
@@ -2065,11 +2096,11 @@ function foldButton(f: Fold): HTMLElement {
   return button;
 }
 
-// Line 2: the question or reason, the error, the plan, or a finished review's findings.
+// Line 2: the question or reason, the error, what it waits for, the plan, or a finished review's findings.
 
 type LineModel =
   | { kind: "question" | "reason"; text: string; tentative: boolean }
-  | { kind: "error" | "findings"; text: string }
+  | { kind: "error" | "findings" | "background"; text: string }
   | ({ kind: "plan" } & PlanModel);
 
 function lineModel(s: SessionView): LineModel | null {
@@ -2081,6 +2112,7 @@ function lineModel(s: SessionView): LineModel | null {
     case "error":
       return { kind: "error", text: oneLine(s.lastError ?? ERROR_FALLBACK) };
     case "working": {
+      if (s.background) return { kind: "background", text: backgroundText(s.background) };
       const plan = planModel(s);
       return plan ? { kind: "plan", ...plan } : null;
     }
@@ -2102,6 +2134,8 @@ function buildLine(m: LineModel): HTMLElement {
       return h("div", "card-line line--error", m.text);
     case "findings":
       return h("div", "card-line line--findings", m.text);
+    case "background":
+      return h("div", "card-line line--background", m.text);
     case "plan":
       return buildPlan(m);
   }

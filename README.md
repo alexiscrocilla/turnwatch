@@ -5,7 +5,7 @@ Petite fenêtre Windows, toujours au premier plan, qui montre en direct l'état 
 Les sessions sont regroupées par projet, et les projets qui ont besoin de toi passent en premier. Chaque carte tient en une ou deux lignes :
 
 - le personnage de la session, dont la pose dit l'état et ce qu'il tient l'outil en cours (voir **États**), puis l'état et sa durée (« attend · 3 h », « en cours · 12 s », « non vue · 5 min »), avec la PR si elle est ouverte, colorée selon la CI, et une petite flèche circulaire quand l'Auto-fix de Desktop la surveille ;
-- une seconde ligne seulement quand elle sert : la question posée si la session t'attend (« Plan à approuver : … » pour un plan), l'erreur, l'avancement de la liste de tâches (`3/7 · Écrire les tests`) pendant le travail, ou le bilan d'une revue de code qui vient de se terminer (« Revue : 13 résultats dont 5 confirmés »).
+- une seconde ligne seulement quand elle sert : la question posée si la session t'attend (« Plan à approuver : … » pour un plan), l'erreur, ce qu'elle attend une fois son tour fini (« Attend une commande : cargo test »), l'avancement de la liste de tâches (`3/7 · Écrire les tests`) pendant le travail, ou le bilan d'une revue de code qui vient de se terminer (« Revue : 13 résultats dont 5 confirmés »).
 
 Le reste est dans l'infobulle de la carte : branche, fichiers non commités, résumé du dernier tour, dernier outil, session parente, messages entre sessions.
 
@@ -16,7 +16,7 @@ Il prévient aussi quand le quota du forfait passe un seuil : la fenêtre de 5 h
 ## Prérequis
 
 - Windows 10 ou 11, avec le runtime WebView2 (déjà présent sur Windows 11).
-- Claude Desktop avec l'onglet Code. Testé avec Claude Desktop 3.1623 et Claude Code 2.1.308.
+- Claude Desktop avec l'onglet Code. Testé avec Claude Desktop 4.4212 et Claude Code 2.1.309.
 - `git` dans le PATH pour les branches et les fichiers non commités.
 - `gh` connecté (`gh auth login`) pour l'état des PR. Sans `gh`, le reste fonctionne.
 
@@ -58,7 +58,7 @@ pnpm tauri dev
 | Pince levée, « ? » ambre | Attend | La session est bloquée sur toi : permission, question, boîte de dialogue, ou tour terminé sur une question (« Décision attendue »). Le « ? » est pâle quand la question est seulement devinée. |
 | Contrarié, « ! » rouge | Erreur | Le dernier tour s'est arrêté sur une erreur (celle que Desktop affiche, ou une erreur d'API). |
 | Drapeau bleu | Non vue | Le tour est fini et tu n'as pas regardé la session depuis. |
-| Sur ses pattes, un outil en main | Au travail | Claude est en train de travailler. |
+| Sur ses pattes, un outil en main | Au travail | Claude travaille, ou a fini son tour et attend une tâche de fond qui le relancera. |
 | Gris, les yeux fermés | Inactive | Rien en cours, déjà vue. |
 
 Au travail, le personnage tient ce que fait la session : un stylo pour une modification, une clé pour une commande, une loupe pour une lecture ou une recherche, un globe pour le web, et un petit crabe l'accompagne quand elle lance un sous-agent. Il fait un pas à chaque appel d'outil et ne bouge pas entre deux : il n'y a aucune animation en continu, qui ferait travailler WebView2 toute la journée. Le pas est supprimé si Windows demande de réduire les animations.
@@ -66,6 +66,7 @@ Au travail, le personnage tient ce que fait la session : un stylo pour une modif
 Comment ces états sont décidés :
 
 - **Attend** vient d'abord des tâches demandées : quand tu demandes une tâche à part, Desktop bloque la session jusqu'à ce que tu choisisses « Nouvelle session » ou « Ici ». Le registre la montre alors au travail ; le moniteur l'affiche « Attend » avec « Nouvelle session pour « … », ou ici ? ». Puis vient le registre de Claude Code (permissions, outil de question). Quand la permission demandée est l'approbation d'un plan (`ExitPlanMode`), la carte dit « Plan à approuver » avec le titre du plan. Une session qui finit son tour sur une question est aussi « Attend » : question posée avec des boutons (`ask` de `wrap_up`) ou session classée « bloquée » par Desktop, affichée « Décision attendue ». Un dernier message qui se termine par « ? » donne « Question dans le dernier message », un signal moins sûr. Seul ton prochain message efface ces attentes : les regarder ne suffit pas.
+- **Au travail** vient du registre pendant un tour. Celui-ci repasse à `idle` dès la fin du tour, même si du travail continue en arrière-plan. Le moniteur suit donc ce travail dans le transcript, jusqu'à la notification de fin : commandes de fond (y compris celles déplacées en fond à leur délai), sous-agents, workflows, moniteurs et réveils planifiés (`ScheduleWakeup`). La carte dit ce que la session attend, et l'état « Non vue » n'arrive qu'à la fin de ce travail. Les questions et les erreurs restent prioritaires. Ce travail meurt avec le processus : celui d'un processus remplacé ne compte plus, et une session en pause n'attend rien. Une session attend aussi les sessions parallèles qu'elle a lancées tant qu'elles travaillent, car Desktop la relance ensuite (« Attend 2 sessions ») ; pas une session détachée, ni une session lancée depuis une carte « New task ».
 - **Erreur** suit les champs d'erreur de Desktop sur 7 jours. Un simple redémarrage de Desktop ne compte pas. Elle s'efface à ton prochain message.
 - **Non vue** se remet à zéro quand tu cliques la carte, ou quand la session est visible dans un volet de Claude Desktop (vue partagée comprise) resté au premier plan au moins une seconde. Les sessions déjà vues sont mémorisées dans `acks.json` et survivent à un redémarrage de l'application. Un tour lancé par une autre session ne rend pas une session « non vue », sauf s'il a produit un résultat.
 - La liste de tâches reprend exactement les statuts affichés par Desktop.
@@ -81,7 +82,7 @@ Tout est lu sur la machine, en lecture seule. Le seul accès réseau passe par `
 |---|---|---|
 | `~\.claude\sessions\<pid>.json` | Sessions vivantes, état, raison de l'attente (une session Desktop sans fichier ici est en pause) | Non (même contenu que `claude agents --json`, qui est officiel) |
 | `%APPDATA%\Claude\claude-code-sessions\…\local_<id>.json` | Titre, archivage, dernier passage, résumé du tour, PR liée par Desktop et son Auto-fix, messages entre sessions, session parente, cartes « New task » en attente | Non |
-| `~\.claude\projects\…\<id>.jsonl` | Outil en cours, liste de tâches, question de fin de tour, erreurs d'API, branche, dernier message, plan à approuver, résultats de revue, tes messages depuis une tâche proposée | Non |
+| `~\.claude\projects\…\<id>.jsonl` | Outil en cours, tâches de fond, liste de tâches, question de fin de tour, erreurs d'API, branche, dernier message, plan à approuver, résultats de revue, tes messages depuis une tâche proposée | Non |
 | `%APPDATA%\Claude\claude_desktop_config.json` | Sessions affichées dans les volets de Desktop | Non |
 | `%APPDATA%\Claude\plan-usage-history.json` | Quota du forfait (fenêtres de 5 h et de 7 jours), tel que Desktop l'a relevé | Non |
 | `git` dans le dossier de la session | Branche, fichiers non commités | Oui |
@@ -124,6 +125,8 @@ Elle ne modifie rien dans `~\.claude` ni dans les dossiers de Claude Desktop.
 - Desktop n'enregistre pas l'onglet affiché. Quand il est au premier plan sur l'onglet Chat, une session visible dans un volet Code compte comme visible, et aucun rappel n'est envoyé pour elle tant que c'est le cas.
 - Une attente qui change de nature sans passer par un autre état (une « question probable » confirmée ensuite par Desktop, par exemple) ne relance pas de rappel.
 - Les questions détectées par Desktop ou par le « ? » final disparaissent quand une autre session ou une tâche relance celle-ci. Les questions à boutons, elles, restent jusqu'à ton message.
+- Une commande de fond compte 2 heures au plus (les autres tâches, 24 heures). Un serveur de développement lancé en fond garde donc sa session verte 2 heures, et une très longue commande passe en inactive ou non vue avant sa fin. Sur 520 commandes mesurées, 3 ont dépassé 2 heures.
+- Les tâches planifiées avec `CronCreate` ne comptent pas comme une attente : le moniteur ne les suit pas. Une commande lancée dans le panneau Terminal de Desktop non plus : sa fin ne relance pas la session.
 - Les sessions cloud lancées depuis Desktop n'ont pas de trace locale et n'apparaissent pas.
 - Une session en pause dont le dernier tour date de plus de 7 jours n'apparaît plus, même si sa question est restée sans réponse.
 - Le quota n'est relevé que quand Claude Desktop est ouvert, au plus toutes les 5 minutes : la jauge peut retarder de quelques minutes sur l'usage réel. Ses heures de réinitialisation sont des estimations tirées de l'historique ; elles manquent tant que l'historique ne montre pas de réinitialisation assez nette.

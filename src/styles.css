@@ -1062,6 +1062,11 @@ button {
   color: var(--error-text);
 }
 
+/* No turn runs, but the session starts again on its own when this ends. */
+.line--background {
+  color: var(--working-text);
+}
+
 /* A finished code review: how many findings wait to be looked at. */
 .line--findings {
   color: var(--unseen-text);

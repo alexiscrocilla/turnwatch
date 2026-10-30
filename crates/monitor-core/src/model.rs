@@ -245,6 +245,57 @@ pub struct TranscriptInfo {
     /// The latest code review the session reported (`ReportFindings`, call
     /// accepted), until the person's next prompt.
     pub findings: Option<FindingsReport>,
+    /// Background work the session started and that has not ended yet, oldest
+    /// first. The process that started it may have died with it since.
+    pub background: Vec<BackgroundTask>,
+}
+
+/// What a session's background work is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BackgroundKind {
+    /// A shell command run in the background, on request or moved there when
+    /// it reached its timeout.
+    #[default]
+    Command,
+    Agent,
+    Workflow,
+    /// A monitor, which wakes the session at each event.
+    Monitor,
+    /// A wake-up planned with `ScheduleWakeup`.
+    Wakeup,
+    /// Side sessions the session started.
+    Sessions,
+}
+
+/// One piece of background work, as the transcript shows it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundTask {
+    /// `<task-id>` of its end notification.
+    pub id: String,
+    pub kind: BackgroundKind,
+    /// One line, at most 120 characters: the command, the agent's description…
+    pub summary: String,
+    pub started_at: Option<i64>,
+    /// When it ends on its own: a monitor's timeout, a wake-up's time.
+    pub ends_at: Option<i64>,
+}
+
+/// What a session whose turn is over waits for, the person apart: it starts
+/// again on its own when that ends.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundWait {
+    /// Kind of the work named by `summary`.
+    pub kind: BackgroundKind,
+    /// The main piece of work: a command, an agent's description, a session's
+    /// title…
+    pub summary: String,
+    /// How many pieces of work it waits for, that one included.
+    pub count: u32,
+    /// `ends_at` of that piece of work.
+    pub ends_at: Option<i64>,
 }
 
 /// A code review's findings, as the session reported them.
@@ -566,6 +617,8 @@ pub struct SessionView {
     /// The latest code review's findings, while some are not handled and the
     /// person has not written since.
     pub findings: Option<FindingsReport>,
+    /// Why a session is Working with no turn running: what it waits for.
+    pub background: Option<BackgroundWait>,
 }
 
 /// A question the session asked at the end of its turn and that the user has

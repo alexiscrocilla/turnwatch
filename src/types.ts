@@ -51,6 +51,19 @@ export interface PrInfo {
   autoFix: boolean;
 }
 
+export type BackgroundKind = "command" | "agent" | "workflow" | "monitor" | "wakeup" | "sessions";
+
+/** What a session whose turn is over waits for, the person apart: it starts again on its own. */
+export interface BackgroundWait {
+  kind: BackgroundKind;
+  /** The main piece of work: a command, an agent's description, a session's title… */
+  summary: string;
+  /** How many pieces of work it waits for, that one included. */
+  count: number;
+  /** When that piece of work ends on its own: a wake-up's time, a monitor's timeout. */
+  endsAt: number | null;
+}
+
 /** A code review's findings, as the session reported them. */
 export interface FindingsReport {
   count: number;
@@ -140,6 +153,8 @@ export interface SessionView {
   version: string | null;
   /** The latest review's findings, while some are open and the person has not written since. */
   findings: FindingsReport | null;
+  /** Why a session is working with no turn running: what it waits for. */
+  background: BackgroundWait | null;
 }
 
 export interface Counts {
