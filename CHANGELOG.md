@@ -2,9 +2,9 @@
 
 Notable changes to this project. Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.2.0 (2026-10-31)
 
-- The app updates itself from GitHub's releases, with signed installers, no window and no prompt. The tray menu turns it off or checks at once. It starts with the next release: from 0.1.0, run that installer by hand once.
+- The app updates itself from GitHub's releases, with signed installers, no window and no prompt. The tray menu turns it off or checks at once. It starts with this version: from 0.1.0, run its installer by hand once.
 - Switching to or from compact mode no longer changes the width of a window that straddles two monitors with different scaling, and no longer nudges a window that sits against a screen edge.
 
 ## 0.1.0 (2026-10-30)

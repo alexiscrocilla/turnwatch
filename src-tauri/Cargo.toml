@@ -1,6 +1,6 @@
 [package]
 name = "turnwatch"
-version = "0.1.0"
+version = "0.2.0"
 description = "Live status of the Claude Code sessions in Claude Desktop"
 authors = ["Alexis Crocilla"]
 license = "MIT"
@@ -24,7 +24,7 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-monitor-core = { version = "0.1.0", path = "../crates/monitor-core" }
+monitor-core = { version = "0.2.0", path = "../crates/monitor-core" }
 tauri-plugin-single-instance = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-window-state = "2"
