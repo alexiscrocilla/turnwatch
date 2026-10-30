@@ -35,7 +35,7 @@
 
   /* Readable text variants of the state colors. */
   --waiting-text: #8a4d05;
-  /* A softer amber for what is only guessed ("Question dans le dernier message"). */
+  /* A softer amber for what is only guessed ("Question in the last message"). */
   --waiting-soft-text: #8c5410;
   --error-text: #b3261e;
   --unseen-text: #1a56c4;
@@ -799,7 +799,7 @@ button {
   stroke-width: 1.75;
 }
 
-/* "Pas pour moi": line 1's height, a 24 px target that does not grow the row. */
+/* "Not for me": line 1's height, a 24 px target that does not grow the row. */
 .card-dismiss {
   flex: 0 0 auto;
   display: inline-flex;
@@ -863,7 +863,7 @@ button {
   font-weight: 600;
 }
 
-/* "attend · 3 h" */
+/* "waiting · 3 h" */
 .card-status {
   flex: 0 0 auto;
   font-size: 14px;

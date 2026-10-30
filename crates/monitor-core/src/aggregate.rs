@@ -4,6 +4,7 @@ use std::cmp::{Ordering, Reverse};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
+use crate::i18n;
 use crate::model::{
     BackgroundKind, BackgroundTask, BackgroundWait, ChecksState, Counts, DesktopSession,
     ErrorMark, GitInfo, MessageSummary, PeerLink, PeerReceipt, PendingQuestion, PrInfo,
@@ -138,6 +139,7 @@ pub fn build_snapshot(input: &AggregateInput) -> Snapshot {
         // Not a session matter: the engine adds it.
         quota: None,
         proposed_tasks,
+        lang: i18n::current(),
     }
 }
 
@@ -217,10 +219,10 @@ fn is_listed_card(suggestion: &TaskSuggestion, now_ms: i64) -> bool {
 
 /// CLI ids of the sessions with a listed card, whether the sessions are listed
 /// or not: [`proposed_tasks`] reads in their transcripts if the card was passed over.
-pub fn proposing_sessions<'a>(
+pub fn proposing_sessions(
     now_ms: i64,
-    desktop: &'a HashMap<String, DesktopSession>,
-) -> impl Iterator<Item = &'a str> {
+    desktop: &HashMap<String, DesktopSession>,
+) -> impl Iterator<Item = &str> {
     desktop
         .values()
         .filter(move |d| !d.is_archived && d.suggestions.iter().any(|s| is_listed_card(s, now_ms)))
@@ -682,9 +684,16 @@ fn pending_offer(input: &StateInput) -> Option<PendingQuestion> {
         .filter(|s| s.offer && !s.accepted && s.expires_at.is_none_or(|at| at > input.now_ms))
         .max_by_key(|s| s.created_at)?;
     let title = plain_text(&offer.title, TASK_TITLE_MAX);
+    let lang = i18n::current();
     Some(question(PendingQuestion {
-        text: format!("Nouvelle session pour « {title} », ou ici ?"),
-        options: vec!["Nouvelle session".to_owned(), "Ici".to_owned()],
+        text: lang.pick(
+            format!("New session for \"{title}\", or here?"),
+            format!("Nouvelle session pour « {title} », ou ici ?"),
+        ),
+        options: vec![
+            lang.pick("New session", "Nouvelle session").to_owned(),
+            lang.pick("Here", "Ici").to_owned(),
+        ],
         source: "offer".to_owned(),
         at: Some(offer.created_at),
     }))
@@ -3099,8 +3108,8 @@ mod tests {
         assert_eq!(d.waiting_for.as_deref(), Some(WAITING_OFFER));
         assert_eq!(d.since, Some(NOW - 2 * MIN));
         let q = d.question.expect("question");
-        assert_eq!(q.text, "Nouvelle session pour « Tâche task_new », ou ici ?");
-        assert_eq!(q.options, ["Nouvelle session", "Ici"]);
+        assert_eq!(q.text, "New session for \"Tâche task_new\", or here?");
+        assert_eq!(q.options, ["New session", "Here"]);
         assert_eq!(q.source, "offer");
 
         // "New session" chosen, expired, or no process: nothing to answer.

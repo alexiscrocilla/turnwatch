@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use monitor_core::engine::{Engine, SnapshotSink};
+use monitor_core::i18n;
 use monitor_core::model::{Settings, Snapshot};
 use monitor_core::paths::now_ms;
 use tauri::menu::MenuEvent;
@@ -45,8 +46,18 @@ const BAR_ONLY_HEIGHT: f64 = 72.0;
 const MIN_EXPANDED_HEIGHT: f64 = 200.0;
 /// How often held-back waits are checked for a reminder toast.
 const TOAST_TICK: Duration = Duration::from_secs(5);
+
 /// Error of the commands called before the shell is ready.
-const STARTING: &str = "L'application démarre encore.";
+fn starting() -> String {
+    i18n::current()
+        .pick("The app is still starting.", "L'application démarre encore.")
+        .to_owned()
+}
+
+/// Title of the main window, which Windows shows in the taskbar.
+fn window_title() -> &'static str {
+    i18n::current().pick("Claude Sessions", "Sessions Claude")
+}
 
 /// State shared by the commands, the tray and the engine sink.
 struct Shell {
@@ -162,6 +173,7 @@ fn setup(app: &AppHandle) -> tauri::Result<()> {
         .as_deref()
         .map(settings_store::load)
         .unwrap_or_default();
+    i18n::set(i18n::resolve(&settings.language));
 
     autostart::repair(app);
     tray::create(
@@ -173,6 +185,7 @@ fn setup(app: &AppHandle) -> tauri::Result<()> {
     )?;
 
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        let _ = window.set_title(window_title());
         let _ = window.set_always_on_top(settings.always_on_top);
         // The restored position may be off screen: a monitor that is gone, or
         // a compact bar saved near the bottom edge.
@@ -291,6 +304,7 @@ fn note_shown(app: &AppHandle, shown: bool) {
 /// (`ready` false) the sources have not been read yet, so they are not
 /// reported as broken; a real startup error is kept.
 fn for_ui(mut snapshot: Snapshot) -> Snapshot {
+    snapshot.lang = i18n::current();
     if !snapshot.ready && snapshot.health.errors.is_empty() {
         snapshot.health.registry_ok = true;
         snapshot.health.desktop_ok = true;
@@ -408,7 +422,7 @@ fn open_or_show(app: &AppHandle, key: &str) {
 /// Shows `key` in Claude Desktop. The engine is told first, and the session
 /// is acknowledged only when Desktop was asked to show it.
 fn open_in_desktop(app: &AppHandle, key: &str) -> Result<(), String> {
-    let shell = app.try_state::<Shell>().ok_or_else(|| STARTING.to_owned())?;
+    let shell = app.try_state::<Shell>().ok_or_else(starting)?;
     let asked = desktop_link::open_session(app, key, || shell.engine.note_open(key))?;
     if asked {
         shell.engine.ack(key);
@@ -516,7 +530,7 @@ fn update_settings(
     app: &AppHandle,
     change: impl FnOnce(&mut Settings),
 ) -> Result<Settings, String> {
-    let shell = app.try_state::<Shell>().ok_or_else(|| STARTING.to_owned())?;
+    let shell = app.try_state::<Shell>().ok_or_else(starting)?;
     let _guard = lock(&shell.apply_lock);
     let old = shell.current_settings();
     let mut wanted = old.clone();
@@ -528,9 +542,14 @@ fn update_settings(
         None => wanted,
     };
     *lock(&shell.settings) = new.clone();
+    // Before the engine: its next snapshot takes the language to the window.
+    i18n::set(i18n::resolve(&new.language));
     shell.engine.set_settings(new.clone());
 
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        if new.language != old.language {
+            let _ = window.set_title(window_title());
+        }
         let _ = window.set_always_on_top(new.always_on_top);
         // A window dragged down to the bar is expanded too, even though the
         // setting already says "not compact".
@@ -540,6 +559,9 @@ fn update_settings(
         }
     }
     tray::sync_checks(app, &new);
+    if new.language != old.language {
+        tray::relabel(app);
+    }
     let _ = app.emit(EVENT_SETTINGS, &new);
     Ok(new)
 }
@@ -758,13 +780,17 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
 /// says (the menu has already flipped its check mark on its own).
 fn set_autostart(app: &AppHandle, wanted: bool) {
     if let Err(error) = autostart::set(app, wanted) {
-        let verb = if wanted { "activer" } else { "désactiver" };
+        let lang = i18n::current();
+        let (en, fr) = if wanted { ("turn on", "activer") } else { ("turn off", "désactiver") };
         show_toast(
             app,
             &toasts::Toast {
                 key: format!("{}autostart", toasts::MONITOR_PREFIX),
-                title: "Démarrage avec Windows".to_owned(),
-                body: format!("Impossible de {verb} le lancement au démarrage : {error}"),
+                title: lang.pick("Start with Windows", "Démarrage avec Windows").to_owned(),
+                body: lang.pick(
+                    format!("Could not {en} starting with Windows: {error}"),
+                    format!("Impossible de {fr} le lancement au démarrage : {error}"),
+                ),
             },
         );
     }
@@ -781,6 +807,9 @@ fn menu_toggle(id: &str) -> Option<fn(&mut Settings)> {
         tray::MENU_NOTIFY_ERROR => |s| s.notify_on_error = !s.notify_on_error,
         tray::MENU_NOTIFY_QUOTA => |s| s.notify_on_quota = !s.notify_on_quota,
         tray::MENU_INCLUDE_CLI => |s| s.include_cli_sessions = !s.include_cli_sessions,
+        tray::MENU_LANGUAGE_AUTO => |s| s.language = "auto".to_owned(),
+        tray::MENU_LANGUAGE_EN => |s| s.language = "en".to_owned(),
+        tray::MENU_LANGUAGE_FR => |s| s.language = "fr".to_owned(),
         _ => return None,
     };
     Some(toggle)
@@ -794,9 +823,14 @@ fn quit(app: &AppHandle) {
 
 /// Only `https://` URLs with a host are opened.
 fn checked_https_url(raw: &str) -> Result<Url, String> {
-    let url = Url::parse(raw.trim()).map_err(|_| format!("URL invalide : {raw}"))?;
+    let lang = i18n::current();
+    let url = Url::parse(raw.trim())
+        .map_err(|_| lang.pick(format!("Invalid URL: {raw}"), format!("URL invalide : {raw}")))?;
     if url.scheme() != "https" || url.host_str().is_none_or(str::is_empty) {
-        return Err(format!("Seules les adresses https:// sont ouvertes : {raw}"));
+        return Err(lang.pick(
+            format!("Only https:// addresses are opened: {raw}"),
+            format!("Seules les adresses https:// sont ouvertes : {raw}"),
+        ));
     }
     Ok(url)
 }
@@ -847,7 +881,12 @@ async fn open_url(app: AppHandle, url: String) -> Result<(), String> {
     let url = checked_https_url(&url)?;
     app.opener()
         .open_url(url.as_str(), None::<&str>)
-        .map_err(|e| format!("Impossible d'ouvrir le lien : {e}"))
+        .map_err(|e| {
+            i18n::current().pick(
+                format!("Could not open the link: {e}"),
+                format!("Impossible d'ouvrir le lien : {e}"),
+            )
+        })
 }
 
 #[tauri::command]

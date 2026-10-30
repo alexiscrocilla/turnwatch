@@ -15,6 +15,7 @@ use serde_json::{Map, Value};
 use crate::aggregate::{self, AggregateInput};
 use crate::desktop::DesktopIndex;
 use crate::git_pr::{GitPrRequest, GitPrService};
+use crate::i18n;
 use crate::model::{
     DesktopSession, GitInfo, PrInfo, Quota, RegistryEntry, RunningAgent, SessionState, Settings,
     Snapshot, SourceHealth, TranscriptInfo, Transition,
@@ -145,7 +146,10 @@ impl Engine {
             snapshot
                 .health
                 .errors
-                .push(format!("Impossible de démarrer le moteur : {e}"));
+                .push(i18n::current().pick(
+                    format!("Could not start the engine: {e}"),
+                    format!("Impossible de démarrer le moteur : {e}"),
+                ));
             lock(&shared).last = Some(snapshot);
         }
         Engine {
@@ -335,9 +339,10 @@ impl WatchSlot {
                 self.error = None;
             }
             Err(e) => {
-                self.error = Some(format!(
-                    "Surveillance impossible de {} : {e}",
-                    self.path.display()
+                let path = self.path.display();
+                self.error = Some(i18n::current().pick(
+                    format!("Could not watch {path}: {e}"),
+                    format!("Surveillance impossible de {path} : {e}"),
                 ));
             }
         }
@@ -388,7 +393,11 @@ fn transcript_event(root: &Path, path: &Path, listed: &HashSet<String>) -> bool 
 }
 
 fn missing_dir(path: &Path) -> String {
-    format!("Dossier introuvable : {}", path.display())
+    let path = path.display();
+    i18n::current().pick(
+        format!("Folder not found: {path}"),
+        format!("Dossier introuvable : {path}"),
+    )
 }
 
 /// Everything the worker thread owns.
@@ -457,7 +466,7 @@ fn run_worker(
     });
     let (git_pr, git_pr_error) = match guarded(|| GitPrService::start(poll_secs, on_change)) {
         Ok(service) => (Some(service), None),
-        Err(msg) => (None, Some(internal_error("Service Git/PR", &msg))),
+        Err(msg) => (None, Some(internal_error(GIT_PR, &msg))),
     };
     let panes = PaneReader::new(paths.desktop_config.clone());
     let usage = UsageReader::new(paths.usage_history.clone());
@@ -600,7 +609,7 @@ impl Worker {
         {
             let secs = settings.pr_poll_secs;
             if let Err(msg) = guarded(|| service.set_poll_secs(secs)) {
-                errors.push(internal_error("Service Git/PR", &msg));
+                errors.push(internal_error(GIT_PR, &msg));
             }
             self.applied_poll_secs = secs;
         }
@@ -627,24 +636,24 @@ impl Worker {
                 if self.last_requests.as_ref() != Some(&requests) {
                     let tracked = requests.clone();
                     if let Err(msg) = guarded(|| service.track(tracked)) {
-                        errors.push(internal_error("Service Git/PR", &msg));
+                        errors.push(internal_error(GIT_PR, &msg));
                     }
                     self.last_requests = Some(requests);
                 }
                 if refresh_all {
                     for request in self.last_requests.iter().flatten() {
                         if let Err(msg) = guarded(|| service.bump(&request.key)) {
-                            errors.push(internal_error("Service Git/PR", &msg));
+                            errors.push(internal_error(GIT_PR, &msg));
                             break;
                         }
                     }
                 }
                 let results = guarded(|| service.results()).unwrap_or_else(|msg| {
-                    errors.push(internal_error("Service Git/PR", &msg));
+                    errors.push(internal_error(GIT_PR, &msg));
                     HashMap::new()
                 });
                 let gh_ok = guarded(|| service.gh_ok()).unwrap_or_else(|msg| {
-                    errors.push(internal_error("Service Git/PR", &msg));
+                    errors.push(internal_error(GIT_PR, &msg));
                     None
                 });
                 (results, gh_ok)
@@ -783,7 +792,7 @@ fn build(
             snapshot
                 .health
                 .errors
-                .push(internal_error("Agrégation", &msg));
+                .push(internal_error(AGGREGATION, &msg));
             (snapshot, false)
         }
     };
@@ -799,7 +808,7 @@ fn read_quota(
     now: i64,
     errors: &mut Vec<String>,
 ) -> Option<Quota> {
-    let mut failed = |msg: String| errors.push(internal_error("Quota", &msg));
+    let mut failed = |msg: String| errors.push(internal_error(QUOTA, &msg));
     let history = guarded(|| reader.read().cloned()).unwrap_or_else(|msg| {
         failed(msg);
         None
@@ -827,7 +836,7 @@ fn read_agents(
     errors: &mut Vec<String>,
 ) -> HashMap<String, Vec<RunningAgent>> {
     guarded(|| companion.agents(listed)).unwrap_or_else(|msg| {
-        errors.push(internal_error("Sous-agents", &msg));
+        errors.push(internal_error(SUB_AGENTS, &msg));
         HashMap::new()
     })
 }
@@ -914,7 +923,7 @@ impl Readers {
                 (self.last_registry.clone(), false)
             }
             Err(msg) => {
-                errors.push(internal_error("Registre", &msg));
+                errors.push(internal_error(REGISTRY, &msg));
                 (self.last_registry.clone(), false)
             }
         };
@@ -923,7 +932,7 @@ impl Readers {
             let root = paths.desktop_root.clone();
             match guarded(|| DesktopIndex::new(root)) {
                 Ok(index) => self.desktop = Some(index),
-                Err(msg) => errors.push(internal_error("Desktop", &msg)),
+                Err(msg) => errors.push(internal_error(DESKTOP, &msg)),
             }
         }
         let mut desktop_ok = false;
@@ -932,14 +941,14 @@ impl Readers {
             match guarded(|| index.refresh()) {
                 Ok(Ok(_)) => desktop_ok = true,
                 Ok(Err(e)) => errors.push(format!("Desktop : {e}")),
-                Err(msg) => errors.push(internal_error("Desktop", &msg)),
+                Err(msg) => errors.push(internal_error(DESKTOP, &msg)),
             }
             let index: &'a DesktopIndex = index;
             match guarded(|| index.sessions()) {
                 Ok(map) => desktop = map,
                 Err(msg) => {
                     desktop_ok = false;
-                    errors.push(internal_error("Desktop", &msg));
+                    errors.push(internal_error(DESKTOP, &msg));
                 }
             }
         }
@@ -950,12 +959,12 @@ impl Readers {
             let dir = paths.projects.clone();
             match guarded(|| TranscriptTracker::new(dir)) {
                 Ok(tracker) => self.transcripts = Some(tracker),
-                Err(msg) => errors.push(internal_error("Transcriptions", &msg)),
+                Err(msg) => errors.push(internal_error(TRANSCRIPTS, &msg)),
             }
         }
         let stopped = guarded(|| aggregate::stopped_sessions(now, &registry, registry_ok, desktop))
             .unwrap_or_else(|msg| {
-                errors.push(internal_error("Sessions arrêtées", &msg));
+                errors.push(internal_error(STOPPED_SESSIONS, &msg));
                 Vec::new()
             });
         let listed_ids: HashSet<String> = registry
@@ -983,11 +992,11 @@ impl Readers {
                         transcripts.insert(id.clone(), info);
                     }
                     Ok(None) => {}
-                    Err(msg) => errors.push(internal_error("Transcriptions", &msg)),
+                    Err(msg) => errors.push(internal_error(TRANSCRIPTS, &msg)),
                 }
             }
             if let Err(msg) = guarded(|| tracker.retain(&followed)) {
-                errors.push(internal_error("Transcriptions", &msg));
+                errors.push(internal_error(TRANSCRIPTS, &msg));
             }
         }
 
@@ -1644,9 +1653,23 @@ fn guarded<T>(f: impl FnOnce() -> T) -> Result<T, String> {
     })
 }
 
-fn internal_error(source: &str, msg: &str) -> String {
-    format!("{source} : erreur interne ({msg})")
+fn internal_error((en, fr): Part, msg: &str) -> String {
+    i18n::current().pick(
+        format!("{en}: internal error ({msg})"),
+        format!("{fr} : erreur interne ({msg})"),
+    )
 }
+
+/// A part of the engine in [`internal_error`], in English and in French.
+type Part = (&'static str, &'static str);
+const GIT_PR: Part = ("Git/PR service", "Service Git/PR");
+const AGGREGATION: Part = ("Aggregation", "Agrégation");
+const QUOTA: Part = ("Quota", "Quota");
+const SUB_AGENTS: Part = ("Sub-agents", "Sous-agents");
+const REGISTRY: Part = ("Registry", "Registre");
+const DESKTOP: Part = ("Desktop", "Desktop");
+const TRANSCRIPTS: Part = ("Transcripts", "Transcriptions");
+const STOPPED_SESSIONS: Part = ("Stopped sessions", "Sessions arrêtées");
 
 /// Removes repeated messages, keeping the first occurrence of each.
 fn dedup(errors: Vec<String>) -> Vec<String> {
@@ -1668,6 +1691,7 @@ fn same_content(a: &Snapshot, b: &Snapshot) -> bool {
         health,
         quota,
         proposed_tasks,
+        lang,
     } = a;
     *ready == b.ready
         && *sessions == b.sessions
@@ -1675,6 +1699,7 @@ fn same_content(a: &Snapshot, b: &Snapshot) -> bool {
         && *health == b.health
         && *quota == b.quota
         && *proposed_tasks == b.proposed_tasks
+        && *lang == b.lang
 }
 
 /// Forgets acks of sessions that are neither live nor known to Desktop.
@@ -2313,6 +2338,7 @@ mod tests {
             health: SourceHealth::default(),
             quota: None,
             proposed_tasks: Vec::new(),
+            lang: i18n::Lang::En,
         };
         let mut b = a.clone();
         b.generated_at = 2;

@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::Lang;
+
 // ---------------------------------------------------------------------------
 // Raw inputs, one struct per source
 // ---------------------------------------------------------------------------
@@ -462,6 +464,9 @@ pub struct Snapshot {
     pub quota: Option<Quota>,
     /// "New task" cards waiting for the person, newest first.
     pub proposed_tasks: Vec<ProposedTask>,
+    /// The language of the window.
+    #[serde(default)]
+    pub lang: Lang,
 }
 
 /// A "New task" card a session proposed, still pending in Desktop. The
@@ -709,6 +714,8 @@ pub struct Settings {
     pub message_window_hours: u64,
     pub compact: bool,
     pub always_on_top: bool,
+    /// "en", "fr", or "auto" to follow Windows: see [`crate::i18n::resolve`].
+    pub language: String,
 }
 
 impl Default for Settings {
@@ -723,6 +730,7 @@ impl Default for Settings {
             message_window_hours: 6,
             compact: false,
             always_on_top: true,
+            language: "auto".to_owned(),
         }
     }
 }

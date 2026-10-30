@@ -1,5 +1,7 @@
 {
   "name": "monitor-compagnon",
   "version": "0.1.0",
-  "description": "Écrit pour Claude Session Monitor le quota exact du forfait et les sous-agents en cours de chaque session"
+  "description": "Writes the plan's exact quota and each session's running sub-agents for Claude Session Monitor",
+  "license": "MIT",
+  "repository": "https://github.com/alexiscrocilla/claude-session-monitor"
 }

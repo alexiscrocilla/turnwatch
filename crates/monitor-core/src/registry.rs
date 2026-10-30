@@ -4,6 +4,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
+use crate::i18n;
 use crate::model::RegistryEntry;
 
 /// Largest accepted gap, in FILETIME units (100 ns), between the registry's
@@ -64,8 +65,13 @@ pub fn parse_entry(json: &str) -> Option<RegistryEntry> {
 /// are skipped. Fails only when `dir` itself cannot be listed. The result is
 /// sorted by pid, then session id.
 pub fn read_live(dir: &Path) -> Result<Vec<RegistryEntry>, String> {
-    let listing = std::fs::read_dir(dir)
-        .map_err(|e| format!("registre illisible ({}) : {e}", dir.display()))?;
+    let listing = std::fs::read_dir(dir).map_err(|e| {
+        let dir = dir.display();
+        i18n::current().pick(
+            format!("unreadable registry ({dir}): {e}"),
+            format!("registre illisible ({dir}) : {e}"),
+        )
+    })?;
 
     let mut entries: Vec<RegistryEntry> = listing
         .filter_map(Result::ok)

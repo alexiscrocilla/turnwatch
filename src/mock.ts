@@ -1,6 +1,9 @@
 // In-browser stand-in for the Tauri backend, used when the page runs outside
-// Tauri (`pnpm dev` in a plain browser). All data is fictional.
+// Tauri (`pnpm dev` in a plain browser). All data is fictional, in English
+// whatever the language of the UI around it.
 
+import { isLang, langOf } from "./i18n";
+import type { Lang } from "./i18n";
 import { CMD, EVENT_SETTINGS, EVENT_SNAPSHOT } from "./types";
 import type {
   Counts,
@@ -35,8 +38,8 @@ const TOOLS: ReadonlyArray<readonly [name: string, summary: string]> = [
   ["Edit", "src/settings/SettingsForm.ts"],
   ["Bash", "pnpm test --filter web"],
   ["Grep", '"useSettings" src/ --type ts'],
-  ["WebFetch", "https://exemple.org/docs/formulaires"],
-  ["Agent", "Audit du formulaire"],
+  ["WebFetch", "https://example.org/docs/forms"],
+  ["Agent", "Form audit"],
   ["update_plan", ""],
 ];
 /** Simulated IPC latency. */
@@ -54,7 +57,7 @@ const K = {
   deps: "local_mock-0007-deps",
   backup: "cli:mock-0008-backup",
   audit: "local_mock-0009-audit",
-  lot: "local_mock-0010-lot",
+  batch: "local_mock-0010-batch",
   grill: "local_mock-0011-grill",
   alias: "local_mock-0012-alias",
   offer: "local_mock-0013-offer",
@@ -62,45 +65,45 @@ const K = {
   contrast: "local_mock-0015-contrast",
 } as const;
 
-const TITLE_SETTINGS = "Refonte de la page Paramètres";
-const TITLE_SEARCH = "Pagination des résultats de recherche";
-const TITLE_DATES = "Dates relatives figées dans la liste";
+const TITLE_SETTINGS = "Settings page redesign";
+const TITLE_SEARCH = "Search results pagination";
+const TITLE_DATES = "Relative dates frozen in the list";
 
 const AUTH_PLAN = [
-  "Ajouter le fournisseur OAuth",
-  "Écrire la migration de la table users",
-  "Adapter le middleware de session",
-  "Mettre à jour les tests",
-  "Documenter la configuration",
+  "Add the OAuth provider",
+  "Write the users table migration",
+  "Adapt the session middleware",
+  "Update the tests",
+  "Document the configuration",
 ];
 const DATES_PLAN = [
-  "Reproduire le gel des dates",
-  "Partager un minuteur unique",
-  "Couvrir le passage à minuit",
-  "Relancer la suite de tests",
+  "Reproduce the frozen dates",
+  "Share a single timer",
+  "Cover the midnight rollover",
+  "Run the test suite again",
 ];
 const SETTINGS_PLAN = [
-  "Lister les réglages existants",
-  "Créer le schéma du formulaire",
-  "Découper la page en sections",
-  "Brancher le formulaire sur l'API",
-  "Gérer les erreurs de validation",
-  "Écrire les tests",
-  "Vérifier le thème sombre",
+  "List the existing settings",
+  "Create the form schema",
+  "Split the page into sections",
+  "Wire the form to the API",
+  "Handle validation errors",
+  "Write the tests",
+  "Check the dark theme",
 ];
 const DEPS_PLAN = [
-  "Mettre à jour les dépendances",
-  "Corriger les avertissements",
-  "Ouvrir la PR",
+  "Update the dependencies",
+  "Fix the warnings",
+  "Open the PR",
 ];
-const LOT_PLAN = [
-  "Lire le ticket #6",
-  "Regrouper les corrections par module",
-  "Écrire les tests de non-régression",
-  "Préparer le lot sur feat/6-lot",
-  "Relecture adverse en 5 axes",
-  "Corriger les points relevés",
-  "Ouvrir la PR",
+const BATCH_PLAN = [
+  "Read ticket #6",
+  "Group the fixes by module",
+  "Write the regression tests",
+  "Prepare the batch on feat/6-batch",
+  "Adversarial review along 5 axes",
+  "Fix the points raised",
+  "Open the PR",
 ];
 
 const MOCK_SETTINGS: Settings = {
@@ -113,6 +116,7 @@ const MOCK_SETTINGS: Settings = {
   messageWindowHours: 6,
   compact: false,
   alwaysOnTop: true,
+  language: "auto",
 };
 
 const STATE_RANK: Record<SessionState, number> = {
@@ -124,6 +128,12 @@ const STATE_RANK: Record<SessionState, number> = {
 };
 
 const ago = (seconds: number): number => Date.now() - seconds * 1000;
+
+/** `?lang=en` or `?lang=fr`, else the browser's language. */
+function mockLang(): Lang {
+  const param = new URLSearchParams(window.location.search).get("lang");
+  return isLang(param) ? param : langOf(navigator.language);
+}
 
 const act = (name: string, summary: string, secondsAgo = 2): ToolActivity => ({
   name,
@@ -156,7 +166,7 @@ const brokenHealth = (): SourceHealth => ({
   registryOk: false,
   desktopOk: false,
   ghOk: false,
-  errors: ["Lecture de local_mock-0003-pdf.json interrompue : fichier en cours d'écriture"],
+  errors: ["Reading local_mock-0003-pdf.json interrupted: file being written"],
 });
 
 /** What the engine returns before its first pass (Snapshot::default()). */
@@ -169,26 +179,27 @@ const notReadySnapshot = (): Snapshot => ({
   health: { registryOk: false, desktopOk: false, ghOk: null, errors: [] },
   quota: null,
   proposedTasks: [],
+  lang: mockLang(),
 });
 
 /** "New task" cards: two under the sessions that proposed them, one alone in its project. */
 const mockTasks = (): ProposedTask[] => [
   {
     id: "task_0a1b2c3d",
-    title: "Tester le passage à l'heure d'hiver",
-    tldr: "Le minuteur partagé n'a pas de test pour le changement d'heure : un cas suffirait.",
+    title: "Test the switch to winter time",
+    tldr: "The shared timer has no test for the clock change: one case would do.",
     createdAt: ago(25 * 60),
     expiresAt: Date.now() + 6 * 24 * HOUR_MS,
     listedUntil: Date.now() + 6 * 24 * HOUR_MS,
     sessionKey: K.dates,
     sessionTitle: TITLE_DATES,
-    project: "carnet",
+    project: "notebook",
     passedOver: false,
   },
   {
     id: "task_8c9d0e1f",
-    title: "Parcourir la page Paramètres au clavier",
-    tldr: "Les nouvelles sections n'ont pas été vérifiées à la tabulation.",
+    title: "Go through the Settings page by keyboard",
+    tldr: "The new sections haven't been checked with the Tab key.",
     createdAt: ago(8 * 60),
     expiresAt: Date.now() + 7 * 24 * HOUR_MS,
     listedUntil: Date.now() + 7 * 24 * HOUR_MS,
@@ -200,8 +211,8 @@ const mockTasks = (): ProposedTask[] => [
   // A second card of the family: it waits behind a row.
   {
     id: "task_2d3e4f5a",
-    title: "Aligner les libellés du formulaire",
-    tldr: "Les sections n'utilisent pas toutes la même largeur de libellé.",
+    title: "Align the form labels",
+    tldr: "The sections don't all use the same label width.",
     createdAt: ago(40 * 60),
     expiresAt: Date.now() + 7 * 24 * HOUR_MS,
     listedUntil: Date.now() + 7 * 24 * HOUR_MS,
@@ -213,7 +224,7 @@ const mockTasks = (): ProposedTask[] => [
   // The person wrote to the session twice since: folded away, without asking for attention.
   {
     id: "task_6b7c8d9e",
-    title: "Supprimer l'ancien écran de préférences",
+    title: "Remove the old preferences screen",
     tldr: null,
     createdAt: ago(2 * 3600),
     expiresAt: null,
@@ -225,15 +236,15 @@ const mockTasks = (): ProposedTask[] => [
   },
   {
     id: "task_4e5f6a7b",
-    title: "Nettoyer les captures d'écran de la doc",
-    tldr: "Douze captures ne correspondent plus à l'interface actuelle.",
+    title: "Clean up the docs screenshots",
+    tldr: "Twelve screenshots no longer match the current interface.",
     createdAt: ago(3 * 3600),
     expiresAt: null,
     // An older card: Desktop never expires it, the monitor lists it 7 days.
     listedUntil: ago(3 * 3600) + 7 * 24 * HOUR_MS,
     sessionKey: "local_mock-0099-docs",
-    sessionTitle: "Mettre à jour la documentation",
-    project: "guide-utilisateur",
+    sessionTitle: "Update the documentation",
+    project: "user-guide",
     passedOver: false,
   },
 ];
@@ -317,7 +328,7 @@ function plan(steps: readonly string[], done: number, wrappedUp = false): PlanPr
 function git(project: string, branch: string, dirtyFiles: number, isDefaultBranch = false): GitInfo {
   return {
     branch,
-    repoRoot: `D:\\Développement\\${project}`,
+    repoRoot: `D:\\Projects\\${project}`,
     dirtyFiles,
     isDefaultBranch,
     checkedAt: Date.now(),
@@ -355,7 +366,7 @@ function session(seed: Seed): SessionView {
     pid: nextPid,
     isDesktop: desktop,
     stopped: false,
-    cwd: `D:\\Développement\\${seed.project}`,
+    cwd: `D:\\Projects\\${seed.project}`,
     worktree: null,
     waitingFor: null,
     question: null,
@@ -393,7 +404,7 @@ function initialSessions(): SessionView[] {
   return [
     session({
       key: K.auth,
-      title: "Migrer l'authentification vers OAuth",
+      title: "Migrate authentication to OAuth",
       project: "atlas-api",
       state: "waiting",
       waitingFor: "permission prompt",
@@ -404,66 +415,66 @@ function initialSessions(): SessionView[] {
     }),
     // Turn ended with wrap_up { ask, actions }: the registry says idle, Desktop says waiting.
     session({
-      key: K.lot,
-      title: "Implémenter #6 : préparer un lot de corrections",
-      project: "facturo",
+      key: K.batch,
+      title: "Implement #6: prepare a batch of fixes",
+      project: "billing",
       state: "waiting",
       waitingFor: "decision",
-      question: ask("Pousser `feat/6-lot` et ouvrir la PR ?", ["Pousser et ouvrir", "Pas encore"], "wrap_up"),
+      question: ask("Push `feat/6-batch` and open the PR?", ["Push and open", "Not yet"], "wrap_up"),
       stateSince: ago(70),
       onScreen: true,
-      recap: "Lot prêt sur feat/6-lot : 9 corrections, tests au vert.",
-      activity: act("wrap_up", "Lot prêt, **9 corrections**", 70),
-      plan: plan(LOT_PLAN, 4, true),
-      git: git("facturo", "feat/6-lot", 0),
+      recap: "Batch ready on feat/6-batch: 9 fixes, tests green.",
+      activity: act("wrap_up", "Batch ready, **9 fixes**", 70),
+      plan: plan(BATCH_PLAN, 4, true),
+      git: git("billing", "feat/6-batch", 0),
     }),
     session({
       key: K.cache,
-      title: "Choisir la stratégie de cache",
+      title: "Choose the cache strategy",
       project: "atlas-api",
       state: "waiting",
       waitingFor: "input needed",
       stateSince: ago(40),
-      activity: act("AskUserQuestion", "Redis partagé ou cache mémoire par instance ?", 40),
+      activity: act("AskUserQuestion", "Shared Redis or an in-memory cache per instance?", 40),
       git: git("atlas-api", "main", 0, true),
     }),
     // Only the wording of the last message says it is a question.
     session({
       key: K.grill,
       title: "Grill with docs",
-      project: "carnet",
+      project: "notebook",
       state: "waiting",
       waitingFor: "probable question",
-      question: ask("Je garde l'ancienne API en parallèle pendant la migration ?", [], "text"),
+      question: ask("Should I keep the old API running alongside during the migration?", [], "text"),
       stateSince: ago(25),
-      git: git("carnet", "docs/grill", 1),
+      git: git("notebook", "docs/grill", 1),
     }),
     // The person asked for a side task: the session waits for "New session" or "Do it here".
     session({
       key: K.offer,
-      title: "Revoir les relances de paiement",
-      project: "facturo",
+      title: "Review the payment reminders",
+      project: "billing",
       state: "waiting",
       waitingFor: "offer",
       question: ask(
-        "Nouvelle session pour « Relances : gérer les cartes refusées », ou ici ?",
-        ["Nouvelle session", "Ici"],
+        'New session for "Reminders: handle declined cards", or here?',
+        ["New session", "Here"],
         "offer",
       ),
       stateSince: ago(90),
     }),
     session({
       key: K.pdf,
-      title: "Corriger l'export PDF des factures",
-      project: "facturo",
+      title: "Fix the invoice PDF export",
+      project: "billing",
       state: "error",
       stateSince: ago(6 * 60),
-      lastError: "API Error: 529 overloaded_error — le tour s'est arrêté avant la fin",
+      lastError: "API Error: 529 overloaded_error — the turn stopped before the end",
       contextExceededCount: 2,
       activity: act("Bash", "cargo test -p export", 6 * 60),
-      git: git("facturo", "fix/pdf-export", 2),
+      git: git("billing", "fix/pdf-export", 2),
       // Desktop's Auto-fix watches the PR, but this session failed: nothing handles the red CI now.
-      pr: pr("exemple/facturo", 16, "Export PDF : polices embarquées", {
+      pr: pr("example/billing", 16, "PDF export: embedded fonts", {
         checks: "fail",
         reviewDecision: "CHANGES_REQUESTED",
         mergeState: "BLOCKED",
@@ -473,7 +484,7 @@ function initialSessions(): SessionView[] {
     session({
       key: K.dates,
       title: TITLE_DATES,
-      project: "carnet",
+      project: "notebook",
       state: "unseen",
       stateSince: ago(4 * 60),
       // Desktop stopped its process since.
@@ -481,23 +492,23 @@ function initialSessions(): SessionView[] {
       pid: 0,
       // Raw Markdown, as the transcript has it: the UI shows it as plain text.
       recap:
-        "Les dates relatives se recalculent chaque minute grâce à un minuteur partagé, comme dans " +
-        "[Implémenter #6](#local_6093b050-3490-4d38-b251-c87d2aa1d597). Tests ajoutés dans " +
-        "`list.test.ts` ; **rien n'est commité**.",
+        "Relative dates are now recomputed every minute by a shared timer, as in " +
+        "[Implement #6](#local_6093b050-3490-4d38-b251-c87d2aa1d597). Tests added in " +
+        "`list.test.ts`; **nothing is committed**.",
       plan: plan(DATES_PLAN, 4, true),
-      git: git("carnet", "fix/relative-dates", 3),
+      git: git("notebook", "fix/relative-dates", 3),
       // The turn ended on a code review.
       findings: { count: 13, confirmed: 5, open: 13, at: ago(4 * 60) },
     }),
     // Plan mode: the plan waits for approval.
     session({
       key: K.planned,
-      title: "Miniatures servies par le CDN",
+      title: "Thumbnails served by the CDN",
       project: "atlas-web",
       state: "waiting",
       waitingFor: "plan approval",
       stateSince: ago(40),
-      activity: act("ExitPlanMode", "Servir les miniatures depuis le CDN", 40),
+      activity: act("ExitPlanMode", "Serve the thumbnails from the CDN", 40),
     }),
     session({
       key: K.settings,
@@ -508,26 +519,26 @@ function initialSessions(): SessionView[] {
       onScreen: true,
       activity: act("Bash", "pnpm test --filter web", 3),
       agents: [
-        { id: "a1", description: "Inventaire des réglages", type: "Explore" },
-        { id: "a2", description: "Audit du formulaire", type: "general-purpose" },
+        { id: "a1", description: "Settings inventory", type: "Explore" },
+        { id: "a2", description: "Form audit", type: "general-purpose" },
       ],
       plan: plan(SETTINGS_PLAN, 3),
       git: git("atlas-web", "feat/settings-page", 6),
       messages: { ...noMessages(), awaitingReply: [link(K.search, TITLE_SEARCH, 5 * 60, true)] },
     }),
-    // Side sessions started by the Paramètres session: nested under it.
+    // Side sessions started by the Settings session: nested under it.
     session({
       key: K.search,
       title: TITLE_SEARCH,
       project: "atlas-web",
-      cwd: "D:\\Développement\\atlas-web\\.claude\\worktrees\\eager-lovelace-7f3a",
+      cwd: "D:\\Projects\\atlas-web\\.claude\\worktrees\\eager-lovelace-7f3a",
       worktree: "eager-lovelace-7f3a",
       state: "working",
       stateSince: ago(3 * 60),
       activity: act("Bash", "pnpm test --filter search", 40),
       background: { kind: "command", summary: "pnpm test --filter search", count: 1, endsAt: null },
       git: git("atlas-web", "claude/search-pagination", 0),
-      pr: pr("exemple/atlas-web", 128, "Pagination des résultats de recherche", {
+      pr: pr("example/atlas-web", 128, TITLE_SEARCH, {
         checks: "pending",
         reviewDecision: "REVIEW_REQUIRED",
         mergeState: "BLOCKED",
@@ -538,42 +549,42 @@ function initialSessions(): SessionView[] {
     }),
     session({
       key: K.contrast,
-      title: "Contraste du thème sombre",
+      title: "Dark theme contrast",
       project: "atlas-web",
       state: "idle",
       stateSince: ago(50 * 60),
-      recap: "Contrastes relevés à 4,5:1 sur les boutons secondaires ; rien d'autre à corriger.",
+      recap: "Contrast raised to 4.5:1 on the secondary buttons; nothing else to fix.",
       git: git("atlas-web", "feat/settings-page", 0),
       parent: { hostSessionId: K.settings, title: TITLE_SETTINGS },
       nestUnder: K.settings,
     }),
     session({
       key: K.deps,
-      title: "Mise à jour des dépendances",
-      project: "facturo",
+      title: "Dependency update",
+      project: "billing",
       state: "idle",
       stateSince: ago(25 * 60),
-      recap: "Toutes les dépendances sont à jour et la PR #57 est fusionnée. Aucun changement cassant.",
+      recap: "All dependencies are up to date and PR #57 is merged. No breaking changes.",
       plan: plan(DEPS_PLAN, 3, true),
-      git: git("facturo", "main", 0, true),
-      pr: pr("exemple/facturo", 57, "Mise à jour des dépendances d'octobre", {
+      git: git("billing", "main", 0, true),
+      pr: pr("example/billing", 57, "October dependency update", {
         state: "MERGED",
         checks: "pass",
         reviewDecision: "APPROVED",
         mergeState: "CLEAN",
       }),
-      messages: { ...noMessages(), undelivered: [link(K.audit, "Audit d'accessibilité", 22 * 60, false)] },
+      messages: { ...noMessages(), undelivered: [link(K.audit, "Accessibility audit", 22 * 60, false)] },
     }),
     // Started in a terminal: listed, but Desktop cannot open it.
     session({
       key: K.backup,
-      title: "Script de sauvegarde nocturne",
+      title: "Nightly backup script",
       project: "dotfiles",
       state: "idle",
       stateSince: ago(2 * 3600 + 5 * 60),
-      recap: "Le script tourne en local, mais la CI échoue sur shellcheck (SC2086 : variables non citées).",
+      recap: "The script runs locally, but CI fails on shellcheck (SC2086: unquoted variables).",
       git: git("dotfiles", "feat/backup", 1),
-      pr: pr("exemple/dotfiles", 9, "Sauvegarde nocturne avec restic", {
+      pr: pr("example/dotfiles", 9, "Nightly backup with restic", {
         isDraft: true,
         checks: "fail",
         mergeState: "DRAFT",
@@ -583,11 +594,11 @@ function initialSessions(): SessionView[] {
     // Second idle session of an idle-only project.
     session({
       key: K.alias,
-      title: "Alias git pour les worktrees",
+      title: "Git aliases for worktrees",
       project: "dotfiles",
       state: "idle",
       stateSince: ago(26 * 3600),
-      recap: "Alias `gwt` et `gwtr` ajoutés au .gitconfig, documentés dans le README.",
+      recap: "Aliases `gwt` and `gwtr` added to .gitconfig, documented in the README.",
       git: git("dotfiles", "main", 0, true),
     }),
   ];
@@ -666,6 +677,7 @@ export function createMockBackend(): MockBackend {
           health,
           quota,
           proposedTasks: tasks,
+          lang: mockLang(),
         }
       : notReadySnapshot();
 
@@ -695,11 +707,11 @@ export function createMockBackend(): MockBackend {
       s.activity = act("Edit", "src/settings/SettingsForm.ts", 1);
     },
     () => move(K.auth, "working", { activity: act("Bash", "pnpm prisma migrate dev --name oauth", 1) }),
-    // The user answered "Pousser et ouvrir" in Desktop.
+    // The user answered "Push and open" in Desktop.
     () =>
-      move(K.lot, "working", {
-        activity: act("Bash", "git push -u origin feat/6-lot", 1),
-        plan: plan(LOT_PLAN, 5),
+      move(K.batch, "working", {
+        activity: act("Bash", "git push -u origin feat/6-batch", 1),
+        plan: plan(BATCH_PLAN, 5),
       }),
     () => {
       const s = find(K.search);
@@ -710,8 +722,8 @@ export function createMockBackend(): MockBackend {
     () => {
       move(K.settings, "unseen", {
         plan: plan(SETTINGS_PLAN, SETTINGS_PLAN.length, true),
-        activity: act("wrap_up", "Page Paramètres terminée", 1),
-        recap: "Page Paramètres refaite : formulaire relié à l'API et **12 tests au vert**. Rien n'est commité.",
+        activity: act("wrap_up", "Settings page finished", 1),
+        recap: "Settings page rebuilt: form wired to the API and **12 tests green**. Nothing is committed.",
         messages: noMessages(),
       });
       const search = find(K.search);
@@ -721,14 +733,14 @@ export function createMockBackend(): MockBackend {
     () =>
       move(K.search, "waiting", {
         waitingFor: "decision",
-        question: ask("Je fusionne la PR #128 dans main ?", ["Fusionner", "Attendre la revue"], "wrap_up"),
-        activity: act("wrap_up", "Checks au vert, revue approuvée", 1),
+        question: ask("Should I merge PR #128 into main?", ["Merge", "Wait for the review"], "wrap_up"),
+        activity: act("wrap_up", "Checks green, review approved", 1),
         onScreen: true,
       }),
     () => move(K.auth, "waiting", { waitingFor: "sandbox request" }),
     () => {
       if (scenario === "health") return;
-      health = { registryOk: true, desktopOk: true, ghOk: false, errors: ["gh pr list : délai dépassé (10 s)"] };
+      health = { registryOk: true, desktopOk: true, ghOk: false, errors: ["gh pr list: timed out (10 s)"] };
     },
     () => {
       if (scenario !== "health") health = okHealth();
@@ -788,7 +800,7 @@ export function createMockBackend(): MockBackend {
       case CMD.openSession:
       case CMD.ackSession: {
         const key = String(args.key);
-        if (!key.startsWith("local_")) throw new Error("Session hors de Claude Desktop");
+        if (!key.startsWith("local_")) throw new Error("Session outside Claude Desktop");
         const s = find(key);
         if (s?.state === "unseen") {
           move(s.key, "idle");
@@ -801,7 +813,7 @@ export function createMockBackend(): MockBackend {
       case CMD.quitApp:
         return null;
       default:
-        throw new Error(`Commande inconnue : ${cmd}`);
+        throw new Error(`Unknown command: ${cmd}`);
     }
   };
 

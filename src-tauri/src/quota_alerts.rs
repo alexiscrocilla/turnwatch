@@ -20,6 +20,7 @@
 //! firing. With the `monitor-compagnon` mod, sessions report the quota
 //! themselves and that toast has no reason to be.
 
+use monitor_core::i18n::{self, Lang};
 use monitor_core::model::{Quota, QuotaWindow, Settings, Snapshot};
 
 use crate::toasts::{MONITOR_PREFIX, Toast};
@@ -105,7 +106,7 @@ impl QuotaAlerts {
         }
         crossed
             .into_iter()
-            .map(|(window, _, usage)| toast(window, usage, now_ms))
+            .map(|(window, _, usage)| toast(window, usage, now_ms, i18n::current()))
             .collect()
     }
 
@@ -142,12 +143,14 @@ impl QuotaAlerts {
             return None;
         }
         self.stop_announced = Some(sampled_at);
+        let lang = i18n::current();
+        let since = duration(now_ms - sampled_at, lang);
         settings.notify_on_quota.then(|| Toast {
             key: format!("{MONITOR_PREFIX}quota-stopped"),
-            title: "Quota : relevé arrêté".to_owned(),
-            body: format!(
-                "Claude Desktop n'a pas relevé le quota depuis {}. Clic droit sur son icône, dans la zone de notification, pour le relancer.",
-                duration(now_ms - sampled_at)
+            title: lang.pick("Quota: sampling stopped", "Quota : relevé arrêté").to_owned(),
+            body: lang.pick(
+                format!("Claude Desktop has not sampled the quota for {since}. Right-click its icon in the notification area to restart it."),
+                format!("Claude Desktop n'a pas relevé le quota depuis {since}. Clic droit sur son icône, dans la zone de notification, pour le relancer."),
             ),
         })
     }
@@ -160,42 +163,46 @@ fn window_of(quota: &Quota, window: Window) -> Option<&QuotaWindow> {
     }
 }
 
-/// "Quota 5 h à 82 %", "Réinitialisation dans 1 h 20", with "Presque épuisé"
-/// from 95 % and "Épuisé" at 100 %. One key per window: a later alert of the
-/// same window replaces the earlier one, nothing else. A click shows the
-/// monitor.
-fn toast(window: Window, usage: &QuotaWindow, now_ms: i64) -> Toast {
+/// "5-hour quota at 82%", "Resets in 1 h 20", with "Almost used up" from 95 %
+/// and "Used up" at 100 %. One key per window: a later alert of the same
+/// window replaces the earlier one, nothing else. A click shows the monitor.
+fn toast(window: Window, usage: &QuotaWindow, now_ms: i64, lang: Lang) -> Toast {
     let (name, key) = match window {
-        Window::FiveHour => ("Quota 5 h", "quota-5h"),
-        Window::SevenDay => ("Quota de la semaine", "quota-7d"),
+        Window::FiveHour => (lang.pick("5-hour quota", "Quota 5 h"), "quota-5h"),
+        Window::SevenDay => (lang.pick("Weekly quota", "Quota de la semaine"), "quota-7d"),
     };
-    let percent = usage.percent.round().clamp(0.0, 999.0) as u32;
+    let percent = lang.percent(usage.percent.round().clamp(0.0, 999.0) as u32);
     let reset = match usage.resets_at {
-        Some(at) if at > now_ms => format!("Réinitialisation dans {}", duration(at - now_ms)),
-        _ => "Heure de réinitialisation inconnue".to_owned(),
+        Some(at) if at > now_ms => {
+            let delay = duration(at - now_ms, lang);
+            lang.pick(format!("Resets in {delay}"), format!("Réinitialisation dans {delay}"))
+        }
+        _ => lang
+            .pick("Reset time unknown", "Heure de réinitialisation inconnue")
+            .to_owned(),
     };
     let body = if usage.percent >= 100.0 {
-        format!("Épuisé. {reset}")
+        lang.pick(format!("Used up. {reset}"), format!("Épuisé. {reset}"))
     } else if usage.percent >= 95.0 {
-        format!("Presque épuisé. {reset}")
+        lang.pick(format!("Almost used up. {reset}"), format!("Presque épuisé. {reset}"))
     } else {
         reset
     };
     Toast {
         key: format!("{MONITOR_PREFIX}{key}"),
-        title: format!("{name} à {percent} %"),
+        title: lang.pick(format!("{name} at {percent}"), format!("{name} à {percent}")),
         body,
     }
 }
 
-/// "45 min", "1 h 20", "6 j 4 h" (minutes rounded up: never too early).
-fn duration(ms: i64) -> String {
+/// "45 min", "1 h 20", "6 d 4 h" (minutes rounded up: never too early).
+fn duration(ms: i64, lang: Lang) -> String {
     let minutes = (ms.max(0) + 59_999) / 60_000;
     let (days, hours, mins) = (minutes / 1440, minutes / 60 % 24, minutes % 60);
     match (days, hours) {
         (0, 0) => format!("{mins} min"),
         (0, _) => format!("{hours} h {mins:02}"),
-        _ => format!("{days} j {hours} h"),
+        _ => format!("{days} {} {hours} h", lang.pick("d", "j")),
     }
 }
 
@@ -236,13 +243,13 @@ mod tests {
     fn each_threshold_fires_once_per_window() {
         let mut alerts = QuotaAlerts::default();
         assert!(titles(&mut alerts, &quota(40.0, 20.0)).is_empty());
-        assert_eq!(titles(&mut alerts, &quota(81.0, 20.0)), ["Quota 5 h à 81 %"]);
+        assert_eq!(titles(&mut alerts, &quota(81.0, 20.0)), ["5-hour quota at 81%"]);
         assert!(titles(&mut alerts, &quota(85.0, 20.0)).is_empty(), "once");
-        assert_eq!(titles(&mut alerts, &quota(95.0, 20.0)), ["Quota 5 h à 95 %"]);
-        assert_eq!(titles(&mut alerts, &quota(96.0, 90.4)), ["Quota de la semaine à 90 %"]);
+        assert_eq!(titles(&mut alerts, &quota(95.0, 20.0)), ["5-hour quota at 95%"]);
+        assert_eq!(titles(&mut alerts, &quota(96.0, 90.4)), ["Weekly quota at 90%"]);
         // The 5-hour window resets: its thresholds rearm.
         assert!(titles(&mut alerts, &quota(3.0, 91.0)).is_empty());
-        assert_eq!(titles(&mut alerts, &quota(82.0, 92.0)), ["Quota 5 h à 82 %"]);
+        assert_eq!(titles(&mut alerts, &quota(82.0, 92.0)), ["5-hour quota at 82%"]);
     }
 
     #[test]
@@ -251,8 +258,8 @@ mod tests {
         titles(&mut alerts, &quota(50.0, 10.0));
         let toasts = alerts.check(Some(&quota(97.0, 10.0)), &Settings::default(), NOW);
         assert_eq!(toasts.len(), 1);
-        assert_eq!(toasts[0].title, "Quota 5 h à 97 %");
-        assert_eq!(toasts[0].body, "Presque épuisé. Réinitialisation dans 1 h 20");
+        assert_eq!(toasts[0].title, "5-hour quota at 97%");
+        assert_eq!(toasts[0].body, "Almost used up. Resets in 1 h 20");
         assert!(crate::toasts::shows_monitor(&toasts[0].key), "a click shows the monitor");
         assert!(titles(&mut alerts, &quota(99.0, 10.0)).is_empty());
     }
@@ -265,28 +272,28 @@ mod tests {
         let keys: Vec<&str> = toasts.iter().map(|t| t.key.as_str()).collect();
         assert_eq!(keys, ["monitor:quota-5h", "monitor:quota-7d"]);
         assert_ne!(keys[0], crate::toasts::SUMMARY_KEY);
-        assert!(toasts.iter().all(|t| t.body.starts_with("Épuisé. ")));
+        assert!(toasts.iter().all(|t| t.body.starts_with("Used up. ")));
     }
 
     #[test]
     fn a_sample_past_the_windows_end_is_a_new_window() {
         let mut alerts = QuotaAlerts::default();
         alerts.check(Some(&quota(50.0, 10.0)), &Settings::default(), NOW);
-        assert_eq!(titles(&mut alerts, &quota(84.0, 10.0)), ["Quota 5 h à 84 %"]);
+        assert_eq!(titles(&mut alerts, &quota(84.0, 10.0)), ["5-hour quota at 84%"]);
         // Desktop closed across the reset: the next sample, already higher,
         // comes after the window's latest possible end.
         let later = Quota {
             sampled_at: NOW + 91 * MIN,
             ..quota(90.0, 10.0)
         };
-        assert_eq!(titles(&mut alerts, &later), ["Quota 5 h à 90 %"]);
+        assert_eq!(titles(&mut alerts, &later), ["5-hour quota at 90%"]);
     }
 
     #[test]
     fn what_is_reached_at_start_stays_quiet() {
         let mut alerts = QuotaAlerts::default();
         assert!(titles(&mut alerts, &quota(88.0, 93.0)).is_empty());
-        assert_eq!(titles(&mut alerts, &quota(95.5, 94.0)), ["Quota 5 h à 96 %"]);
+        assert_eq!(titles(&mut alerts, &quota(95.5, 94.0)), ["5-hour quota at 96%"]);
         assert!(titles(&mut alerts, &quota(96.0, 99.0)).is_empty());
     }
 
@@ -300,7 +307,7 @@ mod tests {
             w.expired = true;
         }
         assert!(titles(&mut alerts, &expired).is_empty(), "the stale value says nothing");
-        assert_eq!(titles(&mut alerts, &quota(81.0, 10.0)), ["Quota 5 h à 81 %"]);
+        assert_eq!(titles(&mut alerts, &quota(81.0, 10.0)), ["5-hour quota at 81%"]);
     }
 
     #[test]
@@ -346,10 +353,10 @@ mod tests {
         let toast = alerts
             .check_stop(&snapshot, &Settings::default(), NOW + 20 * MIN, Some(0))
             .expect("toast");
-        assert_eq!(toast.title, "Quota : relevé arrêté");
+        assert_eq!(toast.title, "Quota: sampling stopped");
         assert_eq!(
             toast.body,
-            "Claude Desktop n'a pas relevé le quota depuis 20 min. Clic droit sur son icône, dans la zone de notification, pour le relancer."
+            "Claude Desktop has not sampled the quota for 20 min. Right-click its icon in the notification area to restart it."
         );
         assert!(crate::toasts::shows_monitor(&toast.key), "a click shows the monitor");
         assert_eq!(stop_at(&mut alerts, &snapshot, NOW + 3 * 60 * MIN, 0), None, "once");
@@ -411,17 +418,33 @@ mod tests {
     }
 
     #[test]
+    fn alerts_speak_french_too() {
+        let usage = QuotaWindow {
+            percent: 97.0,
+            resets_at: Some(NOW + 6 * 1440 * MIN + 4 * 60 * MIN),
+            ..QuotaWindow::default()
+        };
+        let alert = toast(Window::FiveHour, &usage, NOW, Lang::Fr);
+        assert_eq!(alert.title, "Quota 5 h à 97 %");
+        assert_eq!(alert.body, "Presque épuisé. Réinitialisation dans 6 j 4 h");
+        let full = QuotaWindow { percent: 100.0, ..usage };
+        let alert = toast(Window::SevenDay, &full, NOW, Lang::Fr);
+        assert_eq!(alert.title, "Quota de la semaine à 100 %");
+        assert!(alert.body.starts_with("Épuisé. "));
+    }
+
+    #[test]
     fn the_reset_time_reads_as_a_delay() {
         let at = |resets_at: Option<i64>| QuotaWindow {
             percent: 91.0,
             resets_at,
             ..QuotaWindow::default()
         };
-        let body = |w: QuotaWindow| toast(Window::SevenDay, &w, NOW).body;
-        assert_eq!(body(at(Some(NOW + 6 * 1440 * MIN + 4 * 60 * MIN))), "Réinitialisation dans 6 j 4 h");
-        assert_eq!(body(at(Some(NOW + 45 * MIN - 1))), "Réinitialisation dans 45 min");
-        assert_eq!(body(at(Some(NOW - MIN))), "Heure de réinitialisation inconnue");
-        assert_eq!(body(at(None)), "Heure de réinitialisation inconnue");
-        assert_eq!(toast(Window::SevenDay, &at(None), NOW).title, "Quota de la semaine à 91 %");
+        let body = |w: QuotaWindow| toast(Window::SevenDay, &w, NOW, Lang::En).body;
+        assert_eq!(body(at(Some(NOW + 6 * 1440 * MIN + 4 * 60 * MIN))), "Resets in 6 d 4 h");
+        assert_eq!(body(at(Some(NOW + 45 * MIN - 1))), "Resets in 45 min");
+        assert_eq!(body(at(Some(NOW - MIN))), "Reset time unknown");
+        assert_eq!(body(at(None)), "Reset time unknown");
+        assert_eq!(toast(Window::SevenDay, &at(None), NOW, Lang::En).title, "Weekly quota at 91%");
     }
 }

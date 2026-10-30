@@ -1,40 +1,40 @@
 import type { AgentInfo, SessionMeasureInput } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 
-const DOSSIER = 'C:/Users/moi/.claude/session-monitor'
+const FOLDER = 'C:/Users/me/.claude/session-monitor'
 
 const agent = (id: string, status: AgentInfo['status']): AgentInfo => ({
   id,
-  description: `Tâche ${id}`,
+  description: `Task ${id}`,
   type: 'Explore',
   status,
 })
 
-type Bas = {
-  fichiers: Map<string, string>
+type Below = {
+  files: Map<string, string>
   agents: AgentInfo[]
 }
 
-// Rien ne se trouve sous le mod : ces hooks tiennent lieu du moteur.
-function moteur(on: Parameters<Parameters<typeof test>[1]>[1], echec = false): Bas {
-  const bas: Bas = { fichiers: new Map(), agents: [] }
-  on('env.get', (_, e) => ({ value: e.name === 'USERPROFILE' ? 'C:/Users/moi' : undefined }))
+// Nothing sits under the mod: these hooks stand in for the engine.
+function engine(on: Parameters<Parameters<typeof test>[1]>[1], failing = false): Below {
+  const below: Below = { files: new Map(), agents: [] }
+  on('env.get', (_, e) => ({ value: e.name === 'USERPROFILE' ? 'C:/Users/me' : undefined }))
   on('clock.now', () => ({ value: 1_000 }))
   on('session.id', () => ({ value: 'session-1' }))
-  on('agent.list', () => ({ value: bas.agents }))
-  on('fs.exists', (_, e) => ({ value: bas.fichiers.has(slashes(e.path)) }))
+  on('agent.list', () => ({ value: below.agents }))
+  on('fs.exists', (_, e) => ({ value: below.files.has(slashes(e.path)) }))
   on('fs.write', (_, e) => {
-    if (echec) throw new Error('disque plein')
-    bas.fichiers.set(slashes(e.path), e.text)
+    if (failing) throw new Error('disk full')
+    below.files.set(slashes(e.path), e.text)
     return { value: undefined }
   })
-  return bas
+  return below
 }
 
-// Le moteur remet les chemins au format du système.
-const slashes = (chemin: string) => chemin.replaceAll('\\', '/')
+// The engine puts paths back in the system's format.
+const slashes = (path: string) => path.replaceAll('\\', '/')
 
-const mesure = (patch: Partial<SessionMeasureInput>) =>
+const measure = (patch: Partial<SessionMeasureInput>) =>
   ({
     context: {},
     rateLimits: [],
@@ -42,12 +42,12 @@ const mesure = (patch: Partial<SessionMeasureInput>) =>
     ...patch,
   }) as SessionMeasureInput
 
-test('le quota est écrit avec ses heures de réinitialisation en millisecondes', async ($, on) => {
-  const bas = moteur(on)
+test('the quota is written with its reset times in milliseconds', async ($, on) => {
+  const below = engine(on)
   on('session.measure', (_, e) => ({ changed: e.changed }))
 
   await $.session.measure(
-    mesure({
+    measure({
       rateLimits: [
         { kind: 'five_hour', percentUsed: 23.5, resetsAt: '2026-10-30T18:00:00.000Z' },
         { kind: 'seven_day', percentUsed: 11 },
@@ -56,7 +56,7 @@ test('le quota est écrit avec ses heures de réinitialisation en millisecondes'
     }),
   )
 
-  expect(JSON.parse(bas.fichiers.get(`${DOSSIER}/quota.json`) ?? 'null')).toEqual({
+  expect(JSON.parse(below.files.get(`${FOLDER}/quota.json`) ?? 'null')).toEqual({
     version: 1,
     sampledAt: 1_000,
     fiveHour: { percent: 23.5, resetsAt: Date.parse('2026-10-30T18:00:00.000Z') },
@@ -64,53 +64,53 @@ test('le quota est écrit avec ses heures de réinitialisation en millisecondes'
   })
 })
 
-test("une mesure sans quota n'écrit rien", async ($, on) => {
-  const bas = moteur(on)
+test('a measure without a quota writes nothing', async ($, on) => {
+  const below = engine(on)
   on('session.measure', (_, e) => ({ changed: e.changed }))
 
-  await $.session.measure(mesure({ changed: ['cost'] }))
-  await $.session.measure(mesure({ rateLimits: [{ kind: 'spend_limit', percentUsed: 3 }] }))
+  await $.session.measure(measure({ changed: ['cost'] }))
+  await $.session.measure(measure({ rateLimits: [{ kind: 'spend_limit', percentUsed: 3 }] }))
 
-  expect(bas.fichiers.size).toBe(0)
+  expect(below.files.size).toBe(0)
 })
 
-test('les sous-agents actifs sont écrits, et retirés dès leur fin', async ($, on) => {
-  const bas = moteur(on)
+test('active sub-agents are written, and removed as soon as they end', async ($, on) => {
+  const below = engine(on)
   on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: 'a1' }))
   on('turn.complete', () => ({ text: '' }))
-  const chemin = `${DOSSIER}/sessions/session-1.json`
-  const lus = () => JSON.parse(bas.fichiers.get(chemin) ?? 'null')
+  const path = `${FOLDER}/sessions/session-1.json`
+  const read = () => JSON.parse(below.files.get(path) ?? 'null')
 
-  bas.agents = [agent('a1', 'running'), agent('a0', 'completed')]
-  await $.agent.spawn({ prompt: 'Cherche', description: 'Tâche a1' })
-  expect(lus()).toEqual({
+  below.agents = [agent('a1', 'running'), agent('a0', 'completed')]
+  await $.agent.spawn({ prompt: 'Search', description: 'Task a1' })
+  expect(read()).toEqual({
     version: 1,
-    agents: [{ id: 'a1', description: 'Tâche a1', type: 'Explore' }],
+    agents: [{ id: 'a1', description: 'Task a1', type: 'Explore' }],
   })
 
-  // La fin du sous-agent arrive alors que la liste le dit encore en cours.
-  await $.turn.complete({ agentId: 'a1', reason: 'answer', answer: 'fini' } as never)
-  expect(lus()).toEqual({ version: 1, agents: [] })
+  // The sub-agent's end arrives while the list still says it is running.
+  await $.turn.complete({ agentId: 'a1', reason: 'answer', answer: 'done' } as never)
+  expect(read()).toEqual({ version: 1, agents: [] })
 })
 
-test('une session reprise repart sans sous-agents', async ($, on) => {
-  const bas = moteur(on)
+test('a resumed session starts without sub-agents', async ($, on) => {
+  const below = engine(on)
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  const chemin = `${DOSSIER}/sessions/session-1.json`
-  bas.fichiers.set(chemin, '{"version":1,"agents":[{"id":"mort"}]}')
+  const path = `${FOLDER}/sessions/session-1.json`
+  below.files.set(path, '{"version":1,"agents":[{"id":"dead"}]}')
 
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
 
-  expect(JSON.parse(bas.fichiers.get(chemin) ?? 'null')).toEqual({ version: 1, agents: [] })
+  expect(JSON.parse(below.files.get(path) ?? 'null')).toEqual({ version: 1, agents: [] })
 })
 
-test("une écriture qui échoue ne gêne pas la session", async ($, on) => {
-  moteur(on, true)
+test('a failed write does not disturb the session', async ($, on) => {
+  engine(on, true)
   on('session.measure', (_, e) => ({ changed: e.changed }))
 
-  const fin = await $.session.measure(
-    mesure({ rateLimits: [{ kind: 'five_hour', percentUsed: 1 }] }),
+  const result = await $.session.measure(
+    measure({ rateLimits: [{ kind: 'five_hour', percentUsed: 1 }] }),
   )
 
-  expect(fin).toEqual({ changed: ['rateLimits'] })
+  expect(result).toEqual({ changed: ['rateLimits'] })
 })

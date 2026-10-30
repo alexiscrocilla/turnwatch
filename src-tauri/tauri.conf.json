@@ -39,7 +39,7 @@
     "targets": ["nsis"],
     "publisher": "Alexis Crocilla",
     "copyright": "Alexis Crocilla",
-    "shortDescription": "État en direct des sessions Claude Code de Claude Desktop",
+    "shortDescription": "Live status of the Claude Code sessions in Claude Desktop",
     "resources": {
       "../mod/.claude-plugin/marketplace.json": "companion/.claude-plugin/marketplace.json",
       "../mod/monitor-compagnon/.claude-plugin/plugin.json": "companion/monitor-compagnon/.claude-plugin/plugin.json",
@@ -48,7 +48,7 @@
     "windows": {
       "nsis": {
         "installMode": "currentUser",
-        "languages": ["French"],
+        "languages": ["English", "French"],
         "installerHooks": "installer-hooks.nsh"
       }
     },

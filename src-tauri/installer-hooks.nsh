@@ -10,14 +10,25 @@
 !define RUN_KEY "Software\Microsoft\Windows\CurrentVersion\Run"
 !define APPROVED_KEY "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
 !define STARTED_WITH_WINDOWS "StartedWithWindows"
+; Language strings cannot be declared here, before the template loads its
+; languages: the text picks its language with this value of $LANGUAGE.
+!define LCID_FRENCH 1036
 
 !macro NSIS_HOOK_POSTINSTALL
-  DetailPrint "Ajout du mod compagnon à Claude Desktop..."
+  ${If} $LANGUAGE = ${LCID_FRENCH}
+    DetailPrint "Ajout du mod compagnon à Claude Desktop..."
+  ${Else}
+    DetailPrint "Adding the companion mod to Claude Desktop..."
+  ${EndIf}
   nsExec::ExecToStack /TIMEOUT=120000 '"$INSTDIR\${MAINBINARYNAME}.exe" --install-companion'
   Pop $0
   Pop $1
   ${If} $0 != 0
-    MessageBox MB_ICONINFORMATION|MB_OK "Le mod compagnon n'a pas pu être ajouté à Claude Desktop. Le moniteur fonctionne sans lui, avec un quota moins précis.$\n$\nOuvre une fois l'onglet Code de Claude Desktop, puis relance cet installeur.$\n$\n$1" /SD IDOK
+    ${If} $LANGUAGE = ${LCID_FRENCH}
+      MessageBox MB_ICONINFORMATION|MB_OK "Le mod compagnon n'a pas pu être ajouté à Claude Desktop. Le moniteur fonctionne sans lui, avec un quota moins précis.$\n$\nOuvre une fois l'onglet Code de Claude Desktop, puis relance cet installeur.$\n$\n$1" /SD IDOK
+    ${Else}
+      MessageBox MB_ICONINFORMATION|MB_OK "The companion mod could not be added to Claude Desktop. The monitor works without it, with a less precise quota.$\n$\nOpen Claude Desktop's Code tab once, then run this installer again.$\n$\n$1" /SD IDOK
+    ${EndIf}
   ${EndIf}
 
   ReadRegStr $0 SHCTX "${MANUPRODUCTKEY}" "${STARTED_WITH_WINDOWS}"

@@ -1,6 +1,8 @@
 // Mirror of crates/monitor-core/src/model.rs (view model and settings only).
 // Any change there must be made here too. Timestamps are epoch milliseconds.
 
+import type { Lang } from "./i18n";
+
 export type SessionState = "waiting" | "error" | "unseen" | "working" | "idle";
 export type ChecksState = "pass" | "fail" | "pending" | "none";
 
@@ -200,6 +202,8 @@ export interface Snapshot {
   quota: Quota | null;
   /** "New task" cards waiting for the person, newest first. */
   proposedTasks: ProposedTask[];
+  /** The window's language, `Settings.language` resolved. */
+  lang: Lang;
 }
 
 /** A "New task" card a session proposed, still pending in Desktop: the person
@@ -260,6 +264,8 @@ export interface Settings {
   messageWindowHours: number;
   compact: boolean;
   alwaysOnTop: boolean;
+  /** "auto", "en" or "fr", chosen in the tray menu. The UI follows `Snapshot.lang`. */
+  language: string;
 }
 
 // Tauri commands (src-tauri/src/lib.rs) and events, shared by both sides.

@@ -3,6 +3,8 @@
 
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
+import { dateLocale, getLang, isLang, setLang, t } from "./i18n";
+import type { Moment } from "./i18n";
 import { miniCrab, paintSprite, propOf } from "./sprites";
 import type { Prop } from "./sprites";
 import { CMD, EVENT_SETTINGS, EVENT_SNAPSHOT, EVENT_VISIBILITY } from "./types";
@@ -63,30 +65,10 @@ async function createBridge(): Promise<Bridge> {
 }
 
 // ---------------------------------------------------------------------------
-// Labels (French UI)
+// Labels
 // ---------------------------------------------------------------------------
 
 const STATES: readonly SessionState[] = ["waiting", "error", "unseen", "working", "idle"];
-
-const STATE_LABEL: Record<SessionState, string> = {
-  waiting: "En attente",
-  error: "En erreur",
-  unseen: "Terminée, non vue",
-  working: "Au travail",
-  idle: "Inactive",
-};
-
-const REASONS: Record<string, string> = {
-  "permission prompt": "Permission demandée",
-  "input needed": "Question en attente",
-  "sandbox request": "Accès sandbox demandé",
-  "worker request": "Requête d'un worker",
-  "dialog open": "Boîte de dialogue ouverte",
-  decision: "Décision attendue",
-  "probable question": "Question dans le dernier message",
-  offer: "Choix demandé",
-  "plan approval": "Plan à approuver",
-};
 
 /** Waiting reasons guessed from the last message alone: shown less assertively. */
 const TENTATIVE_REASONS = new Set(["probable question"]);
@@ -94,50 +76,11 @@ const TENTATIVE_REASONS = new Set(["probable question"]);
 /** Waiting reasons for which the pending tool call is worth showing. */
 const REASONS_WITH_TOOL = new Set(["permission prompt", "sandbox request"]);
 
-const CHECKS_LABEL: Record<string, string> = {
-  pass: "réussis",
-  fail: "en échec",
-  pending: "en cours",
-  none: "aucun",
-};
+/** The values of `Settings.language`. */
+const LANGUAGES: readonly string[] = ["auto", "en", "fr"];
 
-/** Checks status as a phrase, for spoken labels. */
-const CHECKS_PHRASE: Record<string, string> = {
-  pass: "checks réussis",
-  fail: "checks en échec",
-  pending: "checks en cours",
-  none: "aucun check",
-};
-
-const REVIEW_LABEL: Record<string, string> = {
-  APPROVED: "approuvée",
-  CHANGES_REQUESTED: "modifications demandées",
-  REVIEW_REQUIRED: "en attente de revue",
-};
-
-const MERGE_LABEL: Record<string, string> = {
-  CLEAN: "prête à fusionner",
-  BLOCKED: "bloquée",
-  DIRTY: "conflits à résoudre",
-  BEHIND: "en retard sur la branche de base",
-  UNSTABLE: "checks facultatifs en échec",
-  HAS_HOOKS: "prête (hooks)",
-  DRAFT: "brouillon",
-  UNKNOWN: "état inconnu",
-};
-
-const COMMAND_FAILURE: Record<string, string> = {
-  [CMD.openSession]: "Impossible d'ouvrir la session",
-  [CMD.openUrl]: "Impossible d'ouvrir la PR",
-  [CMD.setCompact]: "Impossible de changer de mode",
-  [CMD.setAlwaysOnTop]: "Impossible de changer l'épinglage",
-  [CMD.hideWindow]: "Impossible de masquer la fenêtre",
-};
-
-const READING = "Lecture des sessions…";
-const CLI_TOOLTIP = "Session lancée dans un terminal : elle ne peut pas être ouverte dans Claude Desktop";
-const ON_SCREEN_TOOLTIP = "Affichée dans Claude Desktop, au premier plan";
-const STOPPED_TOOLTIP = "En pause : Claude Desktop a arrêté son processus. Elle reprend dès que tu lui écris.";
+/** Label of a raw backend value; undefined for a value the table does not know. */
+const labelOf = (table: Record<string, string>, key: string): string | undefined => table[key];
 
 const DEFAULT_SETTINGS: Settings = {
   notifyOnWaiting: true,
@@ -149,15 +92,16 @@ const DEFAULT_SETTINGS: Settings = {
   messageWindowHours: 6,
   compact: false,
   alwaysOnTop: true,
+  language: "auto",
 };
 
 const reasonKey = (raw: string | null): string => (raw ?? "").trim().toLowerCase();
 
-/** French reason for a raw `waitingFor` value; unknown values are shown as is. */
-function reasonFr(raw: string | null): string {
+/** Reason in words for a raw `waitingFor` value; unknown values are shown as is. */
+function reasonLabel(raw: string | null): string {
   const key = reasonKey(raw);
-  if (!key) return "En attente";
-  return REASONS[key] ?? (raw ?? "").trim();
+  if (!key) return t().states.waiting;
+  return labelOf(t().reasons, key) ?? (raw ?? "").trim();
 }
 
 /** The plan's title when the session waits for its approval (the pending call is the plan). */
@@ -169,19 +113,16 @@ function planTitle(s: SessionView): string | null {
 /** Why a session waits, in a few words: the reason, with the plan's title for a plan. */
 function reasonText(s: SessionView): string {
   const plan = planTitle(s);
-  const reason = reasonFr(s.waitingFor);
-  return plan ? `${reason} : ${plan}` : reason;
+  const reason = reasonLabel(s.waitingFor);
+  return plan ? t().labeled(reason, plan) : reason;
 }
 
-/** "Revue : 13 résultats dont 5 confirmés", or what is left to handle. */
+/** "Review: 13 findings, 5 confirmed", or what is left to handle. */
 function findingsText(f: FindingsReport): string {
-  const results = (n: number): string => `${n} ${plural(n, "résultat", "résultats")}`;
-  if (f.open < f.count) return `Revue : ${results(f.open)} sur ${f.count} encore à traiter`;
-  if (f.confirmed >= f.count) {
-    return f.count > 1 ? `Revue : ${results(f.count)}, tous confirmés` : "Revue : 1 résultat confirmé";
-  }
-  const confirmed = f.confirmed > 0 ? ` dont ${f.confirmed} ${plural(f.confirmed, "confirmé", "confirmés")}` : "";
-  return `Revue : ${results(f.count)}${confirmed}`;
+  const msg = t();
+  if (f.open < f.count) return msg.findingsOpen(f.open, f.count);
+  if (f.confirmed >= f.count) return msg.findingsAllConfirmed(f.count);
+  return msg.findings(f.count, f.confirmed);
 }
 
 /** True when the question is only guessed from the wording of the last message. */
@@ -189,31 +130,33 @@ function isTentative(s: SessionView): boolean {
   return TENTATIVE_REASONS.has(reasonKey(s.waitingFor)) || s.question?.source === "text";
 }
 
-/** French plural: 0 and 1 take the singular. */
-const plural = (n: number, one: string, many: string): string => (n > 1 ? many : one);
-
-/** "12 s", "3 min", "2 h", "4 j" (non-breaking space). */
+/** "12 s", "3 min", "2 h", "4 d". */
 function formatAgo(ms: number): string {
+  const msg = t();
   const s = Math.max(0, Math.floor(ms / 1000));
-  if (s < 60) return `${s} s`;
+  if (s < 60) return msg.seconds(s);
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m} min`;
+  if (m < 60) return msg.minutes(m);
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h} h`;
-  return `${Math.floor(h / 24)} j`;
+  if (h < 24) return msg.hours(h);
+  return msg.days(Math.floor(h / 24));
+}
+
+/** The time of `ts`, with its date unless that is today. */
+function momentOf(ts: number): Moment {
+  const date = new Date(ts);
+  const time = date.toLocaleTimeString(dateLocale(), { hour: "2-digit", minute: "2-digit" });
+  if (date.toDateString() === new Date().toDateString()) return { time, date: null };
+  return { time, date: date.toLocaleDateString(dateLocale(), { day: "numeric", month: "short" }) };
 }
 
 function formatClock(ts: number): string {
-  const date = new Date(ts);
-  const time = date.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-  if (date.toDateString() === new Date().toDateString()) return time;
-  return `${date.toLocaleDateString("fr-FR", { day: "numeric", month: "short" })} à ${time}`;
+  return t().clock(momentOf(ts));
 }
 
-/** A moment after a verb: "à 14:05" today, else "le 29 oct. à 14:05". */
+/** A moment after a verb: "at 14:05" today, else "on 29 Oct at 14:05". */
 function formatWhen(ts: number): string {
-  const clock = formatClock(ts);
-  return clock.includes(" à ") ? `le ${clock}` : `à ${clock}`;
+  return t().when(momentOf(ts));
 }
 
 /** One-line message of a rejected command (Tauri rejects with strings). */
@@ -224,7 +167,7 @@ function errorText(err: unknown): string {
   else if (typeof err === "object" && err !== null && "message" in err && typeof err.message === "string") {
     text = err.message;
   }
-  const line = text.replace(/\s+/g, " ").trim() || "erreur inconnue";
+  const line = text.replace(/\s+/g, " ").trim() || t().unknownError;
   return line.length > 160 ? `${line.slice(0, 159)}…` : line;
 }
 
@@ -325,7 +268,7 @@ function sanitizeSession(raw: unknown): SessionView | null {
   const pr = isObj(raw.pr) && num(raw.pr.number) !== null && s.pr ? { ...s.pr, autoFix: raw.pr.autoFix === true } : null;
   return {
     ...s,
-    title: str(s.title).trim() || str(s.project).trim() || "Session sans titre",
+    title: str(s.title).trim() || str(s.project).trim() || t().untitledSession,
     project: str(s.project),
     cwd: str(s.cwd),
     // Only Desktop sessions can be opened; "cli:" keys never are.
@@ -421,6 +364,7 @@ function sanitizeTasks(v: unknown): ProposedTask[] {
   if (!Array.isArray(v)) return [];
   const seen = new Set<string>();
   const out: ProposedTask[] = [];
+  const noTitle = t().aSession;
   for (const t of v) {
     if (!isObj(t)) continue;
     const id = str(t.id);
@@ -437,7 +381,7 @@ function sanitizeTasks(v: unknown): ProposedTask[] {
       expiresAt: num(t.expiresAt),
       listedUntil: num(t.listedUntil) ?? num(t.expiresAt) ?? createdAt,
       sessionKey,
-      sessionTitle: oneLine(str(t.sessionTitle)) || "une session",
+      sessionTitle: oneLine(str(t.sessionTitle)) || noTitle,
       project: str(t.project),
       passedOver: t.passedOver === true,
     });
@@ -467,6 +411,8 @@ function sanitizeSnapshot(raw: unknown): Snapshot | null {
     health: sanitizeHealth(raw.health),
     quota: sanitizeQuota(raw.quota),
     proposedTasks: sanitizeTasks(raw.proposedTasks),
+    // An older backend without it: the language in use stays.
+    lang: isLang(raw.lang) ? raw.lang : getLang(),
   };
 }
 
@@ -477,6 +423,7 @@ function sanitizeSettings(raw: unknown, base: Settings): Settings {
   for (const key of Object.keys(base) as Array<keyof Settings>) {
     if (typeof raw[key] === typeof base[key]) target[key] = raw[key];
   }
+  if (!LANGUAGES.includes(out.language)) out.language = base.language;
   return out;
 }
 
@@ -486,7 +433,7 @@ function sanitizeSettings(raw: unknown, base: Settings): Settings {
 
 function byId<T extends HTMLElement = HTMLElement>(id: string): T {
   const el = document.getElementById(id);
-  if (!el) throw new Error(`Élément #${id} absent de index.html`);
+  if (!el) throw new Error(`Element #${id} missing from index.html`);
   return el as T;
 }
 
@@ -613,12 +560,14 @@ let snapshot: Snapshot | null = null;
 /** An event snapshot was applied: a get_snapshot reply with the same seq brings nothing new. */
 let gotEvent = false;
 let settings: Settings = { ...DEFAULT_SETTINGS };
+/** Text that outlives a render: worded when shown, so that it follows the language. */
+type Message = () => string;
 /** Blocking problem reaching the backend (shown in the health line). */
-let fatalError: string | null = null;
+let fatalError: Message | null = null;
 /** Persistent warning about live updates. */
-let liveWarning: string | null = null;
+let liveWarning: Message | null = null;
 /** Short-lived message after a failed command. */
-let notice: string | null = null;
+let notice: Message | null = null;
 /** "error" for a failed command, "info" for a hint (not a problem). */
 let noticeTone: "error" | "info" = "error";
 let noticeTimer = 0;
@@ -628,6 +577,8 @@ let dirty = false;
 /** The shell says the window is shown (false while hidden to the tray). */
 let shown = true;
 let ticker = 0;
+/** The demo's caption; null in Tauri. */
+let mockCaption: HTMLElement | null = null;
 
 interface CardPart {
   sig: string;
@@ -683,7 +634,7 @@ async function call(cmd: string, args?: Record<string, unknown>): Promise<{ ok: 
   try {
     return { ok: true, value: await bridge.invoke<unknown>(cmd, args) };
   } catch (err) {
-    showNotice(`${COMMAND_FAILURE[cmd] ?? "Commande échouée"} : ${errorText(err)}`);
+    showNotice(() => t().labeled(labelOf(t().commandFailures, cmd) ?? t().commandFailed, errorText(err)));
     return { ok: false, value: null };
   }
 }
@@ -713,7 +664,7 @@ async function expand(): Promise<void> {
   if (!forcedBar) return;
   window.setTimeout(() => {
     if (window.innerHeight <= BAR_MAX_HEIGHT) {
-      showNotice("Fenêtre trop basse : tire son bord inférieur pour l'agrandir", "info");
+      showNotice(() => t().windowTooShort, "info");
     }
   }, 600);
 }
@@ -725,8 +676,8 @@ async function setAlwaysOnTop(value: boolean): Promise<void> {
   applySettings(res.ok ? sanitizeSettings(res.value, settings) : previous);
 }
 
-function showNotice(text: string, tone: "error" | "info" = "error"): void {
-  notice = text;
+function showNotice(message: Message, tone: "error" | "info" = "error"): void {
+  notice = message;
   noticeTone = tone;
   window.clearTimeout(noticeTimer);
   noticeTimer = window.setTimeout(() => {
@@ -745,15 +696,15 @@ function applySettings(next: Settings): void {
   settings = next;
   root.classList.toggle("is-compact", next.compact);
   ui.btnPin.setAttribute("aria-pressed", String(next.alwaysOnTop));
-  ui.btnPin.title = next.alwaysOnTop
-    ? "Toujours au premier plan (activé)"
-    : "Toujours au premier plan (désactivé)";
+  ui.btnPin.title = pinTitle();
   if (modeChanged) {
     keepFocusVisible();
     // The list is not kept up to date while compact.
     scheduleRender();
   }
 }
+
+const pinTitle = (): string => (settings.alwaysOnTop ? t().pinOn : t().pinOff);
 
 /** After a mode switch, moves focus off an element that just got hidden. */
 function keepFocusVisible(): void {
@@ -798,6 +749,23 @@ function setShown(value: boolean): void {
 // Rendering
 // ---------------------------------------------------------------------------
 
+/** What render() does not reach: the document, the fixed labels of index.html, the demo's caption. */
+function renderStatic(): void {
+  const msg = t();
+  root.lang = getLang();
+  document.title = msg.windowTitle;
+  ui.btnCompact.title = msg.compactTitle;
+  setAttr(ui.btnCompact, "aria-label", msg.compactLabel);
+  ui.btnPin.title = pinTitle();
+  setAttr(ui.btnPin, "aria-label", msg.pinLabel);
+  ui.btnHide.title = msg.hideTitle;
+  setAttr(ui.btnHide, "aria-label", msg.hideLabel);
+  ui.btnExpand.title = msg.expandTitle;
+  setAttr(ui.btnExpand, "aria-label", msg.expandLabel);
+  setAttr(ui.scroller, "aria-label", msg.sessionsRegion);
+  if (mockCaption) renderMockCaption(mockCaption);
+}
+
 function scheduleRender(): void {
   dirty = true;
   if (renderQueued || paused()) return;
@@ -824,8 +792,8 @@ function render(): void {
 const isReady = (): boolean => snapshot?.ready === true;
 
 function pendingText(): string {
-  if (fatalError) return "Moteur injoignable";
-  return snapshot ? READING : "Connexion…";
+  if (fatalError) return t().engineUnreachable;
+  return snapshot ? t().reading : t().connecting;
 }
 
 interface SummaryPart {
@@ -834,18 +802,19 @@ interface SummaryPart {
 }
 
 function summaryParts(c: Counts): SummaryPart[] {
+  const msg = t();
   const parts: SummaryPart[] = [];
-  if (c.waiting) parts.push({ text: `${c.waiting} ${plural(c.waiting, "t'attend", "t'attendent")}`, tone: "waiting" });
-  if (c.error) parts.push({ text: `${c.error} en erreur`, tone: "error" });
-  if (c.working) parts.push({ text: `${c.working} au travail`, tone: "working" });
-  if (c.unseen) parts.push({ text: `${c.unseen} ${plural(c.unseen, "non vue", "non vues")}`, tone: "unseen" });
+  if (c.waiting) parts.push({ text: msg.waitingCount(c.waiting), tone: "waiting" });
+  if (c.error) parts.push({ text: msg.errorCount(c.error), tone: "error" });
+  if (c.working) parts.push({ text: msg.workingCount(c.working), tone: "working" });
+  if (c.unseen) parts.push({ text: msg.unseenCount(c.unseen), tone: "unseen" });
   return parts;
 }
 
 /** One-line summary when no part applies: empty list or idle sessions only. */
 function quietSummary(c: Counts): string {
-  if (c.total === 0) return "Aucune session active";
-  return `${c.idle} ${plural(c.idle, "session inactive", "sessions inactives")}`;
+  if (c.total === 0) return t().noSessions;
+  return t().idleSessions(c.idle);
 }
 
 function summaryText(c: Counts): string {
@@ -888,30 +857,27 @@ function renderCompact(rows: readonly HealthRow[]): void {
   if (urgent) paintSession(ui.compactSprite, urgent);
 
   // Health problems and failed commands: a warning button that opens the list.
-  const problems = notice && noticeTone === "error" ? [...rows, { text: notice, tone: "error" as const }] : [...rows];
+  const noticeText = notice?.() ?? null;
+  const problems = noticeText && noticeTone === "error" ? [...rows, { text: noticeText, tone: "error" as const }] : [...rows];
   ui.compactWarn.hidden = problems.length === 0;
   if (problems.length) {
     const tone = problems.some((r) => r.tone === "error") ? "error" : "warn";
     ui.compactWarn.className = `icon-btn compact-warn compact-warn--${tone}`;
-    ui.compactWarn.title = [...problems.map((r) => r.text), "Cliquer pour afficher la liste"].join("\n");
-    setAttr(
-      ui.compactWarn,
-      "aria-label",
-      `${plural(problems.length, "Problème", "Problèmes")} : ${problems.map((r) => r.text).join(" ; ")}. Afficher la liste`,
-    );
+    ui.compactWarn.title = [...problems.map((r) => r.text), t().clickToShowList].join("\n");
+    setAttr(ui.compactWarn, "aria-label", t().problems(problems.map((r) => r.text)));
   }
 
   // A failed command replaces the line for a few seconds, so the click visibly did something.
-  setText(ui.compactNotice, notice ?? "");
-  ui.compactNotice.title = notice ?? "";
-  ui.compactNotice.hidden = notice === null;
+  setText(ui.compactNotice, noticeText ?? "");
+  ui.compactNotice.title = noticeText ?? "";
+  ui.compactNotice.hidden = noticeText === null;
   ui.compactNotice.classList.toggle("is-info", noticeTone === "info");
 
   const waiting = sessions.filter((s) => s.state === "waiting");
-  const first = notice === null ? waiting[0] : undefined;
+  const first = noticeText === null ? waiting[0] : undefined;
   const openHadFocus = document.activeElement === ui.compactOpen;
   ui.compactOpen.hidden = !first;
-  ui.compactSummary.hidden = Boolean(first) || notice !== null;
+  ui.compactSummary.hidden = Boolean(first) || noticeText !== null;
   if (openHadFocus && !first) (ui.compactWarn.hidden ? ui.btnExpand : ui.compactWarn).focus({ preventScroll: true });
 
   if (first) {
@@ -922,15 +888,16 @@ function renderCompact(rows: readonly HealthRow[]): void {
   delete ui.compactOpen.dataset.key;
   let text = snapshot && isReady() ? summaryText(snapshot.counts) : pendingText();
   const prOpen = snapshot && isReady() ? snapshot.counts.prOpen : 0;
-  if (prOpen > 0) text += ` · ${prOpen} PR`;
+  if (prOpen > 0) text += ` · ${t().prCount(prOpen)}`;
   const tasks = listedTasks().filter((t) => !t.passedOver).length;
-  if (tasks > 0) text += ` · ${tasksText(tasks)}`;
+  if (tasks > 0) text += ` · ${t().proposedTasks(tasks)}`;
   setText(ui.compactSummary, text);
   ui.compactSummary.title = text;
 }
 
 /** The compact line for the most urgent waiting session: "<title> · <question or reason>". */
 function renderCompactOpen(first: SessionView, more: number): void {
+  const msg = t();
   const reason = reasonText(first);
   const question = first.question?.text ?? null;
   const options = first.question?.options ?? [];
@@ -943,18 +910,16 @@ function renderCompactOpen(first: SessionView, more: number): void {
   ui.compactOpen.classList.toggle("is-static", !first.isDesktop);
   setAttr(ui.compactOpen, "aria-disabled", first.isDesktop ? null : "true");
 
-  const others = more > 0 ? `${more} ${plural(more, "autre session t'attend", "autres sessions t'attendent")}` : null;
+  const others = more > 0 ? msg.othersWaiting(more) : null;
   const lines = [first.title, reason];
   if (question) lines.push(question);
-  if (options.length) lines.push(`Réponses proposées : ${options.join(" · ")}`);
+  if (options.length) lines.push(msg.suggestedAnswers(options.join(" · ")));
   if (others) lines.push(others);
-  if (!first.isDesktop) lines.push(CLI_TOOLTIP);
+  if (!first.isDesktop) lines.push(msg.cliTooltip);
   ui.compactOpen.title = lines.join("\n");
 
-  const what = question ? `${reason} : ${question}` : reason;
-  const label = first.isDesktop
-    ? `Ouvrir « ${first.title} » : ${what}`
-    : `« ${first.title} » : ${what}. Session de terminal, impossible de l'ouvrir dans Claude Desktop`;
+  const what = question ? msg.labeled(reason, question) : reason;
+  const label = first.isDesktop ? msg.openTitled(first.title, what) : msg.terminalTitled(first.title, what);
   setAttr(ui.compactOpen, "aria-label", others ? `${label}. ${others}` : label);
 }
 
@@ -962,7 +927,8 @@ function onCompactOpen(): void {
   const key = ui.compactOpen.dataset.key;
   if (!key) return;
   if (ui.compactOpen.getAttribute("aria-disabled") === "true") {
-    showNotice(`« ${ui.compactOpenTitle.textContent ?? ""} » tourne dans un terminal : impossible de l'ouvrir dans Claude Desktop`, "info");
+    const title = ui.compactOpenTitle.textContent ?? "";
+    showNotice(() => t().terminalNotice(title), "info");
     return;
   }
   openSession(key);
@@ -976,20 +942,21 @@ function liveParts(rows: readonly HealthRow[]): string[] {
   let errors = "";
   let unseen = "";
   if (snapshot && isReady()) {
+    const msg = t();
     const waiting = snapshot.sessions.filter((s) => s.state === "waiting");
     const first = waiting[0];
     if (first) {
       waitingLine = isTentative(first)
-        ? `« ${first.title} » pose peut-être une question : ${waitingText(first)}`
-        : `« ${first.title} » t'attend : ${waitingText(first)}`;
+        ? msg.liveTentative(first.title, waitingText(first))
+        : msg.liveWaiting(first.title, waitingText(first));
       const more = waiting.length - 1;
-      if (more > 0) others = `${more} ${plural(more, "autre session t'attend", "autres sessions t'attendent")}`;
+      if (more > 0) others = msg.othersWaiting(more);
     }
     const c = snapshot.counts;
-    if (c.error) errors = `${c.error} en erreur`;
-    if (c.unseen) unseen = `${c.unseen} ${plural(c.unseen, "session terminée non vue", "sessions terminées non vues")}`;
+    if (c.error) errors = msg.errorCount(c.error);
+    if (c.unseen) unseen = msg.liveUnseen(c.unseen);
   }
-  return [waitingLine, others, errors, unseen, rows[0]?.text ?? "", notice ?? ""].map(sentence);
+  return [waitingLine, others, errors, unseen, rows[0]?.text ?? "", notice?.() ?? ""].map(sentence);
 }
 
 /** Text as a sentence: a final period unless it already ends with one, "?", "!" or "…". */
@@ -1017,9 +984,6 @@ function renderLive(rows: readonly HealthRow[]): void {
 /** While Desktop samples the quota, it does so every 15 minutes at most: an
  * older latest sample means it stopped. */
 const QUOTA_STALE_MS = 20 * 60_000;
-/** What Desktop needs to sample again. */
-const QUOTA_RESUME_HINT =
-  "Claude Desktop ne relève le quota qu'à son ouverture et pendant les 5 h qui suivent un clic droit sur son icône, dans la zone de notification. Un clic droit sur cette icône relance le relevé.";
 /** From these percents on, a window turns amber, then red. */
 const QUOTA_WARN = 75;
 const QUOTA_HIGH = 90;
@@ -1035,14 +999,14 @@ interface MeterModel {
   tone: QuotaTone;
   /** Percent of the window's time already gone, when its reset is known. */
   elapsed: number | null;
-  /** Reset shown after the percent: "05:25", "jeu."; empty when unknown. */
+  /** Reset shown after the percent: "05:25", "Thu"; empty when unknown. */
   reset: string;
   tooltip: string;
   /** Spoken value. */
   spoken: string;
 }
 
-const clock = (ts: number): string => new Date(ts).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+const clock = (ts: number): string => new Date(ts).toLocaleTimeString(dateLocale(), { hour: "2-digit", minute: "2-digit" });
 
 const quotaTone = (percent: number): QuotaTone =>
   percent >= QUOTA_HIGH ? "high" : percent >= QUOTA_WARN ? "warn" : "ok";
@@ -1055,10 +1019,11 @@ function elapsedOf(w: QuotaWindow, now: number): number | null {
 }
 
 function meterModel(week: boolean, w: QuotaWindow, quota: Quota, now: number): MeterModel {
-  const label = week ? "7 j" : "5 h";
-  const name = week ? "Semaine" : "Fenêtre de 5 h";
+  const msg = t();
+  const label = week ? msg.gaugeWeek : msg.gaugeFiveHours;
+  const name = week ? msg.windowWeek : msg.windowFiveHours;
   const shown = Math.round(w.percent);
-  const sampled = `${quota.fedBySessions ? "Dernier relevé" : "Relevé par Claude Desktop"} : ${formatClock(quota.sampledAt)}`;
+  const sampled = msg.labeled(quota.fedBySessions ? msg.lastSample : msg.sampledByDesktop, formatClock(quota.sampledAt));
   if (w.expired) {
     return {
       label,
@@ -1066,11 +1031,11 @@ function meterModel(week: boolean, w: QuotaWindow, quota: Quota, now: number): M
       tone: "ok",
       elapsed: null,
       reset: "",
-      tooltip: `${name} : réinitialisée depuis le dernier relevé (${shown} % alors)\n${sampled}`,
-      spoken: "réinitialisée depuis le dernier relevé",
+      tooltip: `${msg.labeled(name, msg.quotaExpired(shown))}\n${sampled}`,
+      spoken: msg.quotaExpiredSpoken,
     };
   }
-  const lines = [`${name} : ${shown} % utilisés`];
+  const lines = [msg.labeled(name, msg.percentUsed(shown))];
   let reset = "";
   let resetPhrase = "";
   if (w.resetsAt !== null) {
@@ -1081,27 +1046,25 @@ function meterModel(week: boolean, w: QuotaWindow, quota: Quota, now: number): M
     const exact = w.resetMarginMs === 0;
     if (week) {
       const day = (ts: number, weekday: "long" | "short"): string =>
-        new Date(ts).toLocaleDateString("fr-FR", { weekday, day: "numeric", month: "short" });
-      reset = new Date(w.resetsAt).toLocaleDateString("fr-FR", { weekday: "short" });
-      if (exact) resetPhrase = `réinitialisation ${day(lo, "long")} à ${earliest}`;
+        new Date(ts).toLocaleDateString(dateLocale(), { weekday, day: "numeric", month: "short" });
+      reset = new Date(w.resetsAt).toLocaleDateString(dateLocale(), { weekday: "short" });
+      if (exact) resetPhrase = msg.resetsDayAt(day(lo, "long"), earliest);
       else if (new Date(lo).toDateString() === new Date(hi).toDateString()) {
-        resetPhrase = `réinitialisation ${day(lo, "long")} entre ${earliest} et ${latest}`;
+        resetPhrase = msg.resetsDayBetween(day(lo, "long"), earliest, latest);
       } else {
-        resetPhrase = `réinitialisation entre ${day(lo, "short")} ${earliest} et ${day(hi, "short")} ${latest}`;
+        resetPhrase = msg.resetsBetween(day(lo, "short"), earliest, day(hi, "short"), latest);
       }
     } else {
       reset = clock(w.resetsAt);
-      resetPhrase = exact
-        ? `réinitialisation à ${reset}`
-        : `réinitialisation vers ${reset} (entre ${earliest} et ${latest})`;
+      resetPhrase = exact ? msg.resetsAt(reset) : msg.resetsAround(reset, earliest, latest);
     }
     lines.push(resetPhrase.charAt(0).toUpperCase() + resetPhrase.slice(1));
   } else if (w.percent > 0) {
-    lines.push("Heure de réinitialisation inconnue");
+    lines.push(msg.resetUnknown);
   }
   const elapsed = elapsedOf(w, now);
   if (elapsed !== null) {
-    lines.push(`Temps écoulé : ${Math.round(elapsed)} % ${week ? "de la semaine" : "de la fenêtre"} (zone teintée derrière la barre)`);
+    lines.push(msg.timeElapsed(Math.round(elapsed), week));
   }
   lines.push(sampled);
   return {
@@ -1111,7 +1074,7 @@ function meterModel(week: boolean, w: QuotaWindow, quota: Quota, now: number): M
     elapsed,
     reset,
     tooltip: lines.join("\n"),
-    spoken: [`${shown} % utilisés`, resetPhrase].filter(Boolean).join(", "),
+    spoken: [msg.percentUsed(shown), resetPhrase].filter(Boolean).join(", "),
   };
 }
 
@@ -1130,10 +1093,10 @@ function buildMeter(m: MeterModel): HTMLElement {
   if (m.percent === null) {
     meter.classList.add("meter--expired");
     meter.setAttribute("role", "img");
-    meter.setAttribute("aria-label", `Quota ${m.label} : ${m.spoken}`);
+    meter.setAttribute("aria-label", t().labeled(t().quotaGauge(m.label), m.spoken));
   } else {
     meter.setAttribute("role", "meter");
-    meter.setAttribute("aria-label", `Quota ${m.label}`);
+    meter.setAttribute("aria-label", t().quotaGauge(m.label));
     meter.setAttribute("aria-valuemin", "0");
     meter.setAttribute("aria-valuemax", "100");
     meter.setAttribute("aria-valuenow", String(Math.min(m.percent, 100)));
@@ -1154,7 +1117,7 @@ function buildMeter(m: MeterModel): HTMLElement {
   meter.append(
     dragHandle(h("span", "meter-label", m.label)),
     track,
-    dragHandle(h("span", "meter-value", m.percent === null ? "—" : `${m.percent} %`)),
+    dragHandle(h("span", "meter-value", m.percent === null ? "—" : t().percent(m.percent))),
   );
   if (m.reset) meter.append(dragHandle(h("span", "meter-reset", m.reset)));
   return meter;
@@ -1177,10 +1140,8 @@ function renderQuota(): void {
     meters.append(...models.map(buildMeter));
     const nodes: HTMLElement[] = [meters];
     if (since) {
-      const stale = dragHandle(
-        h("span", "quota-stale", `Pas de relevé depuis ${since} : clic droit sur l'icône de Claude Desktop pour le relancer`),
-      );
-      stale.title = QUOTA_RESUME_HINT;
+      const stale = dragHandle(h("span", "quota-stale", t().quotaStale(since)));
+      stale.title = t().quotaResumeHint;
       nodes.push(stale);
     }
     ui.quota.replaceChildren(...nodes);
@@ -1192,7 +1153,7 @@ function renderQuota(): void {
     .sort((a, b) => (b.percent ?? 0) - (a.percent ?? 0))[0];
   ui.compactQuota.hidden = !top;
   if (top) {
-    setText(ui.compactQuota, `${top.label} ${top.percent} %`);
+    setText(ui.compactQuota, `${top.label} ${t().percent(top.percent ?? 0)}`);
     ui.compactQuota.className = `compact-quota compact-quota--${top.tone}`;
     ui.compactQuota.title = models.map((m) => m.tooltip).join("\n\n");
   }
@@ -1276,7 +1237,7 @@ function groupSessions(sessions: readonly SessionView[], tasks: readonly Propose
     const key = project.trim();
     let group = byKey.get(key);
     if (!group) {
-      group = { key, label: key || "Sans projet", sessions: [], tasks: [], families: [], loose: [], first };
+      group = { key, label: key || t().noProject, sessions: [], tasks: [], families: [], loose: [], first };
       byKey.set(key, group);
     }
     group.first = Math.min(group.first, first);
@@ -1347,19 +1308,18 @@ function createGroup(): GroupEntry {
   return { el, name, count, list, sig: "" };
 }
 
-/** What needs the user in a group, in a few words ("1 t'attend · 1 en erreur · 2 tâches proposées"). */
+/** What needs the user in a group, in a few words ("1 waiting · 1 error · 2 proposed tasks"). */
 function groupNeeds(g: Group): SummaryPart[] {
+  const msg = t();
   const waiting = g.sessions.filter((s) => s.state === "waiting").length;
   const error = g.sessions.filter((s) => s.state === "error").length;
   const tasks = g.tasks.filter((t) => !t.passedOver).length;
   const parts: SummaryPart[] = [];
-  if (waiting) parts.push({ text: `${waiting} ${plural(waiting, "t'attend", "t'attendent")}`, tone: "waiting" });
-  if (error) parts.push({ text: `${error} en erreur`, tone: "error" });
-  if (tasks) parts.push({ text: tasksText(tasks), tone: "task" });
+  if (waiting) parts.push({ text: msg.waitingCount(waiting), tone: "waiting" });
+  if (error) parts.push({ text: msg.errorCount(error), tone: "error" });
+  if (tasks) parts.push({ text: msg.proposedTasks(tasks), tone: "task" });
   return parts;
 }
-
-const tasksText = (n: number): string => `${n} ${plural(n, "tâche proposée", "tâches proposées")}`;
 
 function fillGroup(entry: GroupEntry, g: Group): void {
   const needs = groupNeeds(g);
@@ -1501,8 +1461,8 @@ function renderList(): void {
   ui.empty.hidden = sessions.length > 0 || tasks.length > 0;
   if (!ui.empty.hidden) {
     const ready = isReady();
-    setText(ui.emptyTitle, ready ? "Aucune session active" : pendingText());
-    setText(ui.emptyHint, ready ? "Les sessions de l'onglet Code de Claude Desktop apparaîtront ici." : "");
+    setText(ui.emptyTitle, ready ? t().noSessions : pendingText());
+    setText(ui.emptyHint, ready ? t().emptyHint : "");
   }
 }
 
@@ -1654,34 +1614,33 @@ function createFoldCard(key: string, onToggle: () => void): CardEntry {
   return { el, hit, desc, sig: "", parts: new Map() };
 }
 
-/** "2 sessions imbriquées · 1 en cours · 1 tâche proposée". */
+/** "2 nested sessions · 1 working · 1 proposed task". */
 function foldSummary(hidden: readonly Member[]): string {
+  const msg = t();
   const sessions = hidden.flatMap((m) => (m.kind === "session" ? [m.s] : []));
   const tasks = hidden.length - sessions.length;
   const unseen = sessions.filter((s) => s.state === "unseen").length;
   const working = sessions.filter((s) => s.state === "working").length;
   const parts: string[] = [];
-  if (sessions.length) {
-    parts.push(`${sessions.length} ${plural(sessions.length, "session imbriquée", "sessions imbriquées")}`);
-  }
-  if (unseen) parts.push(`${unseen} ${plural(unseen, "non vue", "non vues")}`);
-  if (working) parts.push(`${working} en cours`);
-  if (tasks) parts.push(tasksText(tasks));
+  if (sessions.length) parts.push(msg.nestedSessions(sessions.length));
+  if (unseen) parts.push(msg.unseenCount(unseen));
+  if (working) parts.push(msg.nestedWorking(working));
+  if (tasks) parts.push(msg.proposedTasks(tasks));
   return parts.join(" · ");
 }
 
 function fillFoldCard(entry: CardEntry, folded: readonly Member[], nest: Nest, open: boolean): void {
+  const msg = t();
   const summary = foldSummary(folded);
-  const titles = folded.map((m) => (m.kind === "session" ? m.s.title : `Tâche proposée : ${m.t.title}`));
-  const verb = open ? "Replier" : "Afficher";
-  const what = folded.some((m) => m.kind === "session") ? "les sessions imbriquées" : "ces tâches";
+  const titles = folded.map((m) => (m.kind === "session" ? m.s.title : msg.proposedTask(m.t.title)));
+  const nested = folded.some((m) => m.kind === "session");
   setAttr(entry.hit as HTMLElement, "aria-expanded", String(open));
   fillEntry(entry, {
     className: `card card--fold card--action${nestClass(nest)}`,
-    name: `${verb} ${summary.split(" · ").join(", ")}`,
+    name: msg.foldAction(open, summary.split(" · ").join(", ")),
     description: titles.join(". "),
-    tooltip: [...titles, `Clic : ${verb.toLowerCase()} ${what}`].join("\n"),
-    sections: [section("head", { summary: open ? `${verb} ${summary}` : summary, open }, buildFoldHead)],
+    tooltip: [...titles, msg.foldHint(open, nested)].join("\n"),
+    sections: [section("head", { summary: open ? msg.foldAction(open, summary) : summary, open }, buildFoldHead)],
   });
 }
 
@@ -1747,9 +1706,6 @@ function fillEntry(entry: CardEntry, c: CardContent): void {
 /** Card key of a task: never a session key ("local_…", "cli:…"). */
 const taskKey = (t: ProposedTask): string => `task:${t.id}`;
 
-const TASK_HINT = "Clic : ouvrir la session dans Claude Desktop, pour lancer ou écarter la tâche";
-const HIDE_TASK_HINT = "Pas pour moi : la masquer ici. Elle reste dans sa session, dans Claude Desktop";
-
 /** Cards set aside here, kept in this window's storage: Desktop still has them,
  * and lost storage only shows them again. */
 const HIDDEN_TASKS_STORE = "monitor.hiddenTasks";
@@ -1762,7 +1718,7 @@ function hideTask(id: string): void {
   if (!hiddenTasks.includes(id)) hiddenTasks.push(id);
   hiddenTasks.splice(0, Math.max(hiddenTasks.length - HIDDEN_TASKS_MAX, 0));
   saveKeys(HIDDEN_TASKS_STORE, hiddenTasks);
-  showNotice("Tâche masquée ici : elle reste dans sa session, dans Claude Desktop", "info");
+  showNotice(() => t().taskHidden, "info");
 }
 
 /** The "New task" cards to show. */
@@ -1821,25 +1777,26 @@ function createTaskCard(t: ProposedTask): CardEntry {
   return { el, hit, desc, sig: "", parts: new Map() };
 }
 
-function fillTaskCard(entry: CardEntry, t: ProposedTask, nest: Nest): void {
-  const lines = [`Tâche proposée : ${t.title}`];
-  if (t.tldr) lines.push(clip(t.tldr, 300));
-  lines.push(`Proposée par ${t.sessionTitle}, ${formatClock(t.createdAt)}`);
-  if (t.passedOver) lines.push("Repliée : tu as écrit deux fois à cette session depuis");
-  if (t.expiresAt !== null && t.expiresAt <= t.listedUntil) {
-    lines.push(`Desktop l'écarte ${formatWhen(t.expiresAt)} si elle n'est pas lancée`);
+function fillTaskCard(entry: CardEntry, task: ProposedTask, nest: Nest): void {
+  const msg = t();
+  const lines = [msg.proposedTask(task.title)];
+  if (task.tldr) lines.push(clip(task.tldr, 300));
+  lines.push(msg.proposedByAt(task.sessionTitle, formatClock(task.createdAt)));
+  if (task.passedOver) lines.push(msg.taskPassedOver);
+  if (task.expiresAt !== null && task.expiresAt <= task.listedUntil) {
+    lines.push(msg.taskExpires(formatWhen(task.expiresAt)));
   } else {
     // Desktop keeps it; the monitor only lists current work.
-    lines.push(`Masquée ici ${formatWhen(t.listedUntil)} ; Desktop la garde jusqu'à ce que tu la lances ou l'écartes`);
+    lines.push(msg.taskListedUntil(formatWhen(task.listedUntil)));
   }
-  lines.push(TASK_HINT);
+  lines.push(msg.taskHint);
   // Under its session, the pitch or nothing: the session above says who proposed it.
-  const line = t.tldr ?? (nest.nested ? null : `Proposée par ${t.sessionTitle}`);
-  const head = section("head", { id: t.id, title: t.title, createdAt: t.createdAt }, buildTaskHead);
+  const line = task.tldr ?? (nest.nested ? null : msg.proposedBy(task.sessionTitle));
+  const head = section("head", { id: task.id, title: task.title, createdAt: task.createdAt }, buildTaskHead);
   fillEntry(entry, {
     className: `card card--task card--action${nestClass(nest)}`,
-    name: `Tâche proposée : ${t.title}, par ${t.sessionTitle}. Ouvrir la session dans Claude Desktop`,
-    description: t.tldr ?? "",
+    name: msg.taskCardName(task.title, task.sessionTitle),
+    description: task.tldr ?? "",
     tooltip: lines.join("\n"),
     sections: line === null ? [head] : [head, section("line", { line }, (m) => h("div", "card-line", m.line))],
   });
@@ -1849,8 +1806,8 @@ function hideTaskButton(id: string, title: string): HTMLElement {
   const button = h("button", "card-dismiss");
   button.type = "button";
   button.dataset.focus = "hide";
-  button.title = HIDE_TASK_HINT;
-  button.setAttribute("aria-label", `Masquer ici la tâche « ${title} »`);
+  button.title = t().hideTaskHint;
+  button.setAttribute("aria-label", t().hideTaskLabel(title));
   button.append(icon("cross"));
   button.addEventListener("click", (e) => {
     // The card behind opens the session.
@@ -1866,9 +1823,9 @@ function buildTaskHead(m: { id: string; title: string; createdAt: number }): HTM
   mark.append(icon("plus"));
   const status = h("span", "card-status");
   status.append(
-    h("span", "status-label", "proposée"),
+    h("span", "status-label", t().stateProposed),
     " · ",
-    sinceSpan(m.createdAt, "status-since", `Proposée ${formatClock(m.createdAt)}`),
+    sinceSpan(m.createdAt, "status-since", t().proposedAt(formatClock(m.createdAt))),
   );
   head.append(mark, h("span", "card-title", m.title), status, hideTaskButton(m.id, m.title));
   return head;
@@ -1897,7 +1854,8 @@ interface Section {
 }
 
 function section<M>(id: string, model: M, build: (m: M) => HTMLElement): Section {
-  return { id, sig: JSON.stringify(model), build: () => build(model) };
+  // The language counts: most models leave the wording to `build`.
+  return { id, sig: JSON.stringify([getLang(), model]), build: () => build(model) };
 }
 
 /** Line 1 (state, title, time) and, when it answers "does it need me / where is it", line 2. */
@@ -1916,30 +1874,23 @@ function activityText(a: ToolActivity): string {
 const branchOf = (s: SessionView): string => str(s.git?.branch).trim() || str(s.worktree).trim();
 const dirtyOf = (s: SessionView): number => Math.max(num(s.git?.dirtyFiles) ?? 0, 0);
 const parentTitle = (s: SessionView): string | null =>
-  s.parent ? str(s.parent.title).trim() || "une autre session" : null;
-const peerName = (link: PeerLink): string => str(link.peerTitle).trim() || "session inconnue";
+  s.parent ? str(s.parent.title).trim() || t().anotherSession : null;
+const peerName = (link: PeerLink): string => str(link.peerTitle).trim() || t().unknownSession;
 const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
-const ERROR_FALLBACK = "Le dernier tour s'est terminé sur une erreur";
 
-const BACKGROUND_LABEL: Partial<Record<string, string>> = {
-  command: "Attend une commande",
-  agent: "Attend un agent",
-  workflow: "Attend un workflow",
-  monitor: "Surveille",
-};
-
-/** What a session waits for once its turn is over: "Attend une commande : cargo test". */
+/** What a session waits for once its turn is over: "Waiting for a command: cargo test". */
 function backgroundText(b: BackgroundWait): string {
-  const named = (label: string): string => (b.summary ? `${label} : ${b.summary}` : label);
-  if (b.kind === "sessions") return b.count > 1 ? `Attend ${b.count} sessions` : named("Attend une session");
-  if (b.count > 1) return named(`Attend ${b.count} tâches`);
-  if (b.kind === "wakeup") return named(b.endsAt !== null ? `Reprend à ${formatClock(b.endsAt)}` : "Reprendra");
-  return named(BACKGROUND_LABEL[b.kind] ?? "Attend une tâche");
+  const msg = t();
+  const named = (label: string): string => (b.summary ? msg.labeled(label, b.summary) : label);
+  if (b.kind === "sessions") return b.count > 1 ? msg.waitingForSessions(b.count) : named(msg.waitingForSession);
+  if (b.count > 1) return named(msg.waitingForTasks(b.count));
+  if (b.kind === "wakeup") return named(b.endsAt !== null ? msg.resumesAt(momentOf(b.endsAt)) : msg.willResume);
+  return named(labelOf(msg.background, b.kind) ?? msg.waitingForTask);
 }
 
 /** Accessible name of a card's button: title, state and what it is about. */
 function cardName(s: SessionView): string {
-  const parts = [s.title, STATE_LABEL[s.state]];
+  const parts = [s.title, t().states[s.state]];
   switch (s.state) {
     case "waiting":
       parts.push(reasonText(s));
@@ -1951,7 +1902,7 @@ function cardName(s: SessionView): string {
       else if (s.activity) parts.push(activityText(s.activity));
       break;
     case "error":
-      parts.push(s.lastError ?? ERROR_FALLBACK);
+      parts.push(s.lastError ?? t().errorFallback);
       break;
     case "unseen":
     case "idle":
@@ -1962,85 +1913,79 @@ function cardName(s: SessionView): string {
 
 /** Accessible description: what the tooltip and the card tell beyond the name. */
 function cardDescription(s: SessionView): string {
+  const msg = t();
   const out: string[] = [];
   if ((s.state === "unseen" || s.state === "idle") && s.recap) out.push(s.recap);
   if (s.state === "waiting" && s.question?.options.length) {
-    out.push(`Réponses proposées : ${s.question.options.join(", ")}`);
+    out.push(msg.suggestedAnswers(s.question.options.join(", ")));
   }
   if (s.findings) out.push(findingsText(s.findings));
-  if (s.onScreen) out.push("Affichée dans Claude Desktop");
-  const where = [s.project ? `projet ${s.project}` : "", branchOf(s) ? `branche ${branchOf(s)}` : ""].filter(Boolean);
+  if (s.onScreen) out.push(msg.shownInDesktop);
+  const where = [s.project ? msg.inProject(s.project) : "", branchOf(s) ? msg.onBranch(branchOf(s)) : ""].filter(Boolean);
   if (where.length) out.push(where.join(", "));
   const dirty = dirtyOf(s);
-  if (dirty > 0) out.push(`${dirty} ${plural(dirty, "fichier modifié non commité", "fichiers modifiés non commités")}`);
+  if (dirty > 0) out.push(msg.dirtyFiles(dirty));
   const plan = planModel(s);
-  if (plan) out.push(`Plan : ${plan.done} sur ${plan.total}${plan.current ? `, en cours : ${plan.current}` : ""}`);
+  if (plan) out.push(msg.planProgress(plan.done, plan.total, plan.current));
   const pr = prModel(s);
   if (pr) out.push(`PR #${pr.number}, ${prStatus(pr, s.state)}`);
   out.push(...extrasLines(extrasModel(s)));
   if (s.agents.length) out.push(agentsText(s.agents));
   const parent = parentTitle(s);
-  if (parent) out.push(`Lancée depuis ${parent}`);
+  if (parent) out.push(msg.startedFrom(parent));
   return out.map(sentence).join(" ");
 }
 
 /** The card's tooltip: the details that no longer fit on it, one per line. */
 function cardTooltip(s: SessionView): string {
+  const msg = t();
   const lines: string[] = [];
-  if (!s.isDesktop) lines.push(CLI_TOOLTIP);
+  if (!s.isDesktop) lines.push(msg.cliTooltip);
   if (s.state === "waiting") {
-    const reason = reasonFr(s.waitingFor);
+    const reason = reasonLabel(s.waitingFor);
     const plan = planTitle(s);
     if (s.question) {
-      lines.push(`${reason} : ${clip(s.question.text, 300)}`);
-      if (s.question.options.length) lines.push(`Réponses proposées : ${s.question.options.join(" · ")}`);
+      lines.push(msg.labeled(reason, clip(s.question.text, 300)));
+      if (s.question.options.length) lines.push(msg.suggestedAnswers(s.question.options.join(" · ")));
     }
     if (plan) {
       const at = s.activity?.at ?? null;
-      lines.push(`${reason} : ${clip(plan, 300)}${at !== null ? ` (${formatClock(at)})` : ""}`);
+      lines.push(`${msg.labeled(reason, clip(plan, 300))}${at !== null ? ` (${formatClock(at)})` : ""}`);
     }
     if (s.activity && REASONS_WITH_TOOL.has(reasonKey(s.waitingFor))) {
-      lines.push(`Demande : ${clip(activityText(s.activity), 160)}`);
+      lines.push(msg.requestLine(clip(activityText(s.activity), 160)));
     }
   }
-  if (s.state === "error" && s.lastError) lines.push(`Erreur : ${clip(s.lastError, 300)}`);
+  if (s.state === "error" && s.lastError) lines.push(msg.errorLine(clip(s.lastError, 300)));
   if (s.background) lines.push(clip(backgroundText(s.background), 300));
   if (s.findings) lines.push(findingsText(s.findings));
   const branch = str(s.git?.branch).trim();
   const worktree = str(s.worktree).trim();
-  if (branch) lines.push(`Branche : ${branch}`);
-  if (worktree) lines.push(`Worktree : ${worktree}`);
+  if (branch) lines.push(msg.branchLine(branch));
+  if (worktree) lines.push(msg.worktreeLine(worktree));
   const dirty = dirtyOf(s);
-  if (dirty > 0) lines.push(`${dirty} ${plural(dirty, "fichier modifié non commité", "fichiers modifiés non commités")}`);
+  if (dirty > 0) lines.push(msg.dirtyFiles(dirty));
   const pr = prModel(s);
   if (pr && !isOpen(pr)) lines.push(`PR #${pr.number} ${prStatus(pr, s.state)}`);
-  if (s.recap) lines.push(`Résumé : ${clip(oneLine(s.recap), 200)}`);
+  if (s.recap) lines.push(msg.recapLine(clip(oneLine(s.recap), 200)));
   // For a plan to approve, the activity is the plan call itself, already shown above.
   const planShown = planTitle(s) !== null;
   if (s.activity && !planShown) {
     const at = s.activity.at !== null ? ` (${formatClock(s.activity.at)})` : "";
-    lines.push(`Dernière activité : ${clip(activityText(s.activity), 120)}${at}`);
+    lines.push(msg.activityLine(`${clip(activityText(s.activity), 120)}${at}`));
   } else if (!s.activity && s.lastActivityAt !== null && num(s.lastActivityAt) !== null) {
-    lines.push(`Dernière activité : ${formatClock(s.lastActivityAt)}`);
+    lines.push(msg.activityLine(formatClock(s.lastActivityAt)));
   }
   if (s.agents.length) lines.push(clip(agentsText(s.agents), 300));
   const parent = parentTitle(s);
-  if (parent) lines.push(`Lancée depuis ${parent}`);
+  if (parent) lines.push(msg.startedFrom(parent));
   lines.push(...extrasLines(extrasModel(s)));
-  if (s.stopped) lines.push(STOPPED_TOOLTIP);
-  if (s.onScreen) lines.push(ON_SCREEN_TOOLTIP);
+  if (s.stopped) lines.push(msg.stoppedTooltip);
+  if (s.onScreen) lines.push(msg.onScreenTooltip);
   return lines.join("\n");
 }
 
-// Line 1: character, title, eye, CLI tag, open PR chip, "attend · 3 h".
-
-const STATE_SHORT: Record<SessionState, string> = {
-  waiting: "attend",
-  error: "erreur",
-  unseen: "non vue",
-  working: "en cours",
-  idle: "",
-};
+// Line 1: character, title, eye, CLI tag, open PR chip, "waiting · 3 h".
 
 interface HeadModel {
   state: SessionState;
@@ -2072,25 +2017,25 @@ function buildHead(m: HeadModel): HTMLElement {
   head.append(h("span", "sprite"), h("span", "card-title", m.title));
   if (m.onScreen) {
     const eye = h("span", "card-eye");
-    eye.title = ON_SCREEN_TOOLTIP;
+    eye.title = t().onScreenTooltip;
     eye.append(icon("eye"));
     head.append(eye);
   }
   if (m.cli) {
     const tag = h("span", "card-tag", "CLI");
-    tag.title = CLI_TOOLTIP;
+    tag.title = t().cliTooltip;
     head.append(tag);
   }
   if (m.agents.length) head.append(crew(m.agents));
   if (m.fold) head.append(foldButton(m.fold));
   if (m.pr) head.append(prChip(m.pr, m.state));
-  const label = STATE_SHORT[m.state];
+  const label = t().statesShort[m.state];
   if (label || m.since !== null) {
     const status = h("span", `card-status status--${m.state}`);
     if (label) status.append(h("span", "status-label", label));
     if (label && m.since !== null) status.append(" · ");
     if (m.since !== null) {
-      status.append(sinceSpan(m.since, "status-since", `${STATE_LABEL[m.state]} depuis ${formatClock(m.since)}`));
+      status.append(sinceSpan(m.since, "status-since", t().stateSince(t().states[m.state], formatClock(m.since))));
     }
     head.append(status);
   }
@@ -2100,10 +2045,10 @@ function buildHead(m: HeadModel): HTMLElement {
 /** Mini crabs shown for a session's sub-agents; the others are counted after them. */
 const CREW_SHOWN = 3;
 
-/** "2 sous-agents : Audit du code, Tests". */
+/** "2 sub-agents: Code audit, Tests". */
 function agentsText(agents: readonly RunningAgent[]): string {
-  const names = agents.map((a) => a.description || a.type || "tâche sans nom");
-  return `${agents.length} ${plural(agents.length, "sous-agent", "sous-agents")} : ${names.join(", ")}`;
+  const names = agents.map((a) => a.description || a.type || t().unnamedTask);
+  return t().subAgents(agents.length, names.join(", "));
 }
 
 /** One small crab per running sub-agent. */
@@ -2120,7 +2065,7 @@ function foldButton(f: Fold): HTMLElement {
   const button = h("button", "card-fold");
   button.type = "button";
   button.dataset.focus = "fold";
-  const label = f.open ? "Replier les sessions imbriquées" : "Déplier les sessions imbriquées";
+  const label = f.open ? t().collapseNested : t().expandNested;
   button.title = label;
   button.setAttribute("aria-label", label);
   button.setAttribute("aria-expanded", String(f.open));
@@ -2148,7 +2093,7 @@ function lineModel(s: SessionView): LineModel | null {
         ? { kind: "question", text: s.question.text, tentative: isTentative(s) }
         : { kind: "reason", text: reasonText(s), tentative: isTentative(s) };
     case "error":
-      return { kind: "error", text: oneLine(s.lastError ?? ERROR_FALLBACK) };
+      return { kind: "error", text: oneLine(s.lastError ?? t().errorFallback) };
     case "working": {
       if (s.background) return { kind: "background", text: backgroundText(s.background) };
       const plan = planModel(s);
@@ -2242,9 +2187,6 @@ function prModel(s: SessionView): PrModel | null {
 
 const isOpen = (pr: PrModel): boolean => str(pr.state).toUpperCase() === "OPEN";
 
-const AUTO_FIX_TOOLTIP =
-  "Auto-fix : Claude Desktop relance la session quand la CI échoue, en cas de conflit ou de commentaire de revue";
-
 /**
  * Auto-fix watches this open PR: "handling" while the session works on its failing CI or
  * conflict, else "on". Desktop wakes the session once per failure: once that turn ends,
@@ -2255,8 +2197,6 @@ function autoFixState(pr: PrModel, state: SessionState): "on" | "handling" | nul
   const trouble = pr.checks === "fail" || str(pr.mergeState).toUpperCase() === "DIRTY";
   return trouble && state === "working" ? "handling" : "on";
 }
-
-const AUTO_FIX_PHRASE = { on: "Auto-fix actif", handling: "Auto-fix s'en charge" } as const;
 
 type PrVariant = "pass" | "fail" | "pending" | "none";
 
@@ -2272,29 +2212,32 @@ function prVariant(pr: PrModel): PrVariant {
 }
 
 function prStatus(pr: PrModel, session: SessionState): string {
+  const msg = t();
   const state = str(pr.state).toUpperCase();
-  if (state === "MERGED") return "fusionnée";
-  if (state === "CLOSED") return "fermée";
-  const checks = CHECKS_PHRASE[pr.checks] ?? "checks inconnus";
+  if (state === "MERGED") return msg.prMerged;
+  if (state === "CLOSED") return msg.prClosed;
+  const checks = labelOf(msg.checksPhrases, pr.checks) ?? msg.checksPhraseUnknown;
   const autoFix = autoFixState(pr, session);
-  const status = pr.isDraft ? `brouillon, ${checks}` : `ouverte, ${checks}`;
-  return autoFix ? `${status}, ${AUTO_FIX_PHRASE[autoFix]}` : status;
+  const status = pr.isDraft ? msg.prDraftStatus(checks) : msg.prOpenStatus(checks);
+  if (!autoFix) return status;
+  return `${status}, ${autoFix === "handling" ? msg.autoFixHandling : msg.autoFixOn}`;
 }
 
 function prTooltip(pr: PrModel, session: SessionState): string {
+  const msg = t();
   const title = str(pr.title).trim();
   const lines = [`PR #${pr.number}${title ? ` · ${title}` : ""}`];
-  lines.push(pr.isDraft ? "Ouverte · brouillon" : "Ouverte");
-  lines.push(`Checks : ${CHECKS_LABEL[pr.checks] ?? "inconnus"}`);
+  lines.push(pr.isDraft ? msg.prOpenDraft : msg.prOpen);
+  lines.push(msg.prChecks(labelOf(msg.checks, pr.checks) ?? msg.checksUnknown));
   const review = str(pr.reviewDecision).trim();
-  if (review) lines.push(`Revue : ${REVIEW_LABEL[review] ?? review}`);
+  if (review) lines.push(msg.prReview(labelOf(msg.reviews, review) ?? review));
   const merge = str(pr.mergeState).trim();
-  if (merge) lines.push(`Fusion : ${MERGE_LABEL[merge] ?? merge.toLowerCase()}`);
+  if (merge) lines.push(msg.prMerge(labelOf(msg.merges, merge) ?? merge.toLowerCase()));
   const repo = str(pr.repository).trim();
   if (repo) lines.push(repo);
   const autoFix = autoFixState(pr, session);
-  if (autoFix) lines.push(AUTO_FIX_TOOLTIP);
-  if (autoFix === "handling") lines.push("La session y travaille : Auto-fix s'en charge");
+  if (autoFix) lines.push(msg.autoFixTooltip);
+  if (autoFix === "handling") lines.push(msg.autoFixWorking);
   return lines.join("\n");
 }
 
@@ -2305,7 +2248,7 @@ function prChip(pr: PrModel, session: SessionState): HTMLElement {
   btn.type = "button";
   btn.dataset.focus = "pr";
   btn.title = prTooltip(pr, session);
-  btn.setAttribute("aria-label", `Ouvrir la PR #${pr.number} (${prStatus(pr, session)})`);
+  btn.setAttribute("aria-label", t().prOpenLabel(pr.number, prStatus(pr, session)));
   btn.append(icon(PR_ICON[variant]), h("span", "", `#${pr.number}`));
   if (autoFix) {
     const mark = icon("autoFix");
@@ -2345,11 +2288,12 @@ function extrasModel(s: SessionView): ExtrasModel {
 }
 
 function extrasLines(m: ExtrasModel): string[] {
+  const msg = t();
   const out: string[] = [];
-  for (const peer of m.awaiting) out.push(`Attend une réponse de ${peer}`);
-  for (const u of m.unread) out.push(`${u.count} ${plural(u.count, "message non lu", "messages non lus")} de ${u.name}`);
-  for (const peer of m.undelivered) out.push(`Message non livré à ${peer}`);
-  if (m.exceeded > 0) out.push(m.exceeded > 1 ? `Contexte dépassé ${m.exceeded} fois` : "Contexte dépassé");
+  for (const peer of m.awaiting) out.push(msg.awaitingReply(peer));
+  for (const u of m.unread) out.push(msg.unreadMessages(u.count, u.name));
+  for (const peer of m.undelivered) out.push(msg.undelivered(peer));
+  if (m.exceeded > 0) out.push(msg.contextExceeded(m.exceeded));
   return out;
 }
 
@@ -2365,15 +2309,15 @@ interface HealthRow {
 /** Source and connection problems, most serious first (failed commands apart). */
 function healthRows(): HealthRow[] {
   const rows: HealthRow[] = [];
-  if (fatalError) rows.push({ text: fatalError, tone: "error" });
-  if (liveWarning) rows.push({ text: liveWarning, tone: "warn" });
+  if (fatalError) rows.push({ text: fatalError(), tone: "error" });
+  if (liveWarning) rows.push({ text: liveWarning(), tone: "warn" });
   if (snapshot) {
     const health = snapshot.health;
     // Before the engine's first pass the source flags are defaults, not failures.
     if (snapshot.ready) {
-      if (!health.registryOk) rows.push({ text: "Registre des sessions introuvable", tone: "warn" });
-      if (!health.desktopOk) rows.push({ text: "Fichiers de Claude Desktop illisibles", tone: "warn" });
-      if (health.ghOk === false) rows.push({ text: "gh indisponible : statut des PR en pause", tone: "warn" });
+      if (!health.registryOk) rows.push({ text: t().registryMissing, tone: "warn" });
+      if (!health.desktopOk) rows.push({ text: t().desktopUnreadable, tone: "warn" });
+      if (health.ghOk === false) rows.push({ text: t().ghDown, tone: "warn" });
     }
     if (health.errors.length) rows.push({ text: health.errors[0], tone: "warn" });
   }
@@ -2382,7 +2326,7 @@ function healthRows(): HealthRow[] {
 
 function renderHealth(base: readonly HealthRow[]): void {
   const tone = noticeTone === "info" ? ("warn" as const) : ("error" as const);
-  const rows = notice ? [...base, { text: notice, tone }] : base;
+  const rows = notice ? [...base, { text: notice(), tone }] : base;
   const sig = JSON.stringify(rows);
   if (ui.health.dataset.sig === sig) return;
   ui.health.dataset.sig = sig;
@@ -2418,11 +2362,17 @@ function tickTimes(): void {
  * overtaken by an event that is then newer or equal.
  */
 function acceptSnapshot(raw: unknown, origin: "event" | "fetch"): void {
-  const next = sanitizeSnapshot(raw);
+  let next = sanitizeSnapshot(raw);
   if (!next) return;
   if (snapshot) {
     if (next.seq < snapshot.seq) return;
     if (origin === "fetch" && gotEvent && next.seq === snapshot.seq) return;
+  }
+  if (next.lang !== getLang()) {
+    setLang(next.lang);
+    // Sanitizing wrote its fallback titles in the language it replaces.
+    next = sanitizeSnapshot(raw) ?? next;
+    renderStatic();
   }
   if (origin === "event") gotEvent = true;
   walks = nextWalks(next.sessions);
@@ -2491,20 +2441,29 @@ function setupMockChrome(): void {
   root.classList.add("is-mock");
   // ?wide: the window as the user often widens it.
   root.classList.toggle("is-mock-wide", new URLSearchParams(window.location.search).has("wide"));
-  const caption = h("p", "mock-caption", "Mode démo hors Tauri, données fictives. Scénarios : ");
+  mockCaption = h("p", "mock-caption");
+  renderMockCaption(mockCaption);
+  ui.app.after(mockCaption);
+}
+
+function renderMockCaption(caption: HTMLElement): void {
+  const msg = t();
+  const lang = new URLSearchParams(window.location.search).get("lang");
   const scenarios: Array<[string, string]> = [
-    ["complet", "?"],
-    ["fenêtre large", "?wide"],
-    ["vide", "?scenario=empty"],
-    ["sources en panne", "?scenario=health"],
+    [msg.mockFull, "?"],
+    [msg.mockWide, "?wide"],
+    [msg.mockEmpty, "?scenario=empty"],
+    [msg.mockHealth, "?scenario=health"],
   ];
+  const nodes: Array<Node | string> = [msg.mockCaption];
   scenarios.forEach(([label, href], i) => {
-    if (i > 0) caption.append(" · ");
+    if (i > 0) nodes.push(" · ");
     const a = h("a", "", label);
-    a.href = href;
-    caption.append(a);
+    // ?lang=… chose the language: following a link keeps it.
+    a.href = lang === null ? href : `${href}${href === "?" ? "" : "&"}lang=${encodeURIComponent(lang)}`;
+    nodes.push(a);
   });
-  ui.app.after(caption);
+  caption.replaceChildren(...nodes);
 }
 
 async function loadSnapshot(): Promise<void> {
@@ -2512,7 +2471,7 @@ async function loadSnapshot(): Promise<void> {
   try {
     acceptSnapshot(await bridge.invoke<unknown>(CMD.getSnapshot), "fetch");
   } catch (err) {
-    fatalError = `Impossible de lire l'état des sessions : ${errorText(err)}`;
+    fatalError = () => t().stateUnreadable(errorText(err));
     scheduleRender();
   }
 }
@@ -2522,19 +2481,20 @@ async function loadSettings(): Promise<void> {
   try {
     applySettings(sanitizeSettings(await bridge.invoke<unknown>(CMD.getSettings), settings));
   } catch (err) {
-    showNotice(`Réglages illisibles : ${errorText(err)}`);
+    showNotice(() => t().settingsUnreadable(errorText(err)));
   }
 }
 
 async function start(): Promise<void> {
   bindUi();
+  renderStatic();
   applySettings(settings);
   scheduleRender();
 
   try {
     bridge = await createBridge();
   } catch (err) {
-    fatalError = `Initialisation impossible : ${errorText(err)}`;
+    fatalError = () => t().startFailed(errorText(err));
     scheduleRender();
     return;
   }
@@ -2551,7 +2511,7 @@ async function start(): Promise<void> {
     });
   } catch (err) {
     live = false;
-    liveWarning = `Mises à jour en direct indisponibles (${errorText(err)}), actualisation toutes les 2 s`;
+    liveWarning = () => t().liveUnavailable(errorText(err));
   }
 
   await Promise.all([loadSnapshot(), loadSettings()]);

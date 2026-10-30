@@ -15,6 +15,7 @@ use std::time::{Duration, Instant, SystemTime};
 use serde::de::{self, Deserialize, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde_json::Value;
 
+use crate::i18n;
 use crate::model::{
     BackgroundKind, BackgroundTask, ErrorMark, FindingsReport, PendingQuestion, PlanItem,
     PlanProgress, ToolActivity, TranscriptInfo, TurnInfo, TurnOrigin,
@@ -1085,26 +1086,27 @@ fn after_reminders(mut text: &str) -> Option<&str> {
     Some(text)
 }
 
-/// French label of a `wrap_up` app action (a button without `label`).
+/// Label of a `wrap_up` app action (a button without `label`).
 fn app_action_label(action: &str) -> Option<&'static str> {
-    Some(match action.trim() {
-        "commit" => "Commiter",
-        "create_pr" => "Ouvrir la PR",
-        "merge" => "Fusionner",
-        "fix_ci" => "Corriger la CI",
-        "address_comments" => "Traiter les commentaires",
-        "resolve_conflicts" => "Résoudre les conflits",
-        "verify" => "Vérifier",
-        "archive" => "Archiver",
-        "new_session" => "Nouvelle session",
+    let (en, fr) = match action.trim() {
+        "commit" => ("Commit", "Commiter"),
+        "create_pr" => ("Open the PR", "Ouvrir la PR"),
+        "merge" => ("Merge", "Fusionner"),
+        "fix_ci" => ("Fix CI", "Corriger la CI"),
+        "address_comments" => ("Address the comments", "Traiter les commentaires"),
+        "resolve_conflicts" => ("Resolve the conflicts", "Résoudre les conflits"),
+        "verify" => ("Verify", "Vérifier"),
+        "archive" => ("Archive", "Archiver"),
+        "new_session" => ("New session", "Nouvelle session"),
         _ => return None,
-    })
+    };
+    Some(i18n::current().pick(en, fr))
 }
 
 /// The question a `wrap_up` leaves to the person: its `ask` (or `next_ask`,
 /// `needs_user`), or, when it says `blocked`, the first sentence of its
 /// recap. Desktop's buttons are the options: `actions[].label`, or the
-/// French name of an app action (`{"action": "commit"}`).
+/// name of an app action (`{"action": "commit"}`).
 fn wrap_up_question(input: &Value, at: Option<i64>) -> Option<PendingQuestion> {
     let blocked = match input.get("blocked") {
         Some(Value::Bool(b)) => *b,
@@ -1585,7 +1587,10 @@ fn update_plan_summary(input: &Value) -> String {
             .find(|i| i.status == Status::InProgress)
             .or_else(|| parsed.iter().find(|i| i.status == Status::Pending))
             .map(|i| i.content.clone())
-            .unwrap_or_else(|| format!("{} étapes", parsed.len()));
+            .unwrap_or_else(|| {
+                let steps = parsed.len();
+                i18n::current().pick(format!("{steps} steps"), format!("{steps} étapes"))
+            });
     }
     let mut parts = Vec::new();
     if let Some(done) = input.get("done") {
@@ -3701,7 +3706,7 @@ mod tests {
             {"action": "teleport"}]});
         let lines = [assistant_tool("t1", WRAP_UP, input, &at(0))];
         let ask = info_of(&lines.join("\n")).pending_ask.expect("question");
-        assert_eq!(ask.options, ["Commiter", "Pas encore", "Ouvrir"]);
+        assert_eq!(ask.options, ["Commit", "Pas encore", "Ouvrir"]);
     }
 
     #[test]

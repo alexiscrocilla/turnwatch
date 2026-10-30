@@ -1,86 +1,86 @@
 import type { AgentInfo, EngineInterface, Register, SessionRateLimit } from 'claude-code'
 
-// Ce que ce mod écrit pour Claude Session Monitor, dans `<config>/session-monitor` :
-//   quota.json            le quota du forfait, le même pour toutes les sessions :
-//                         la dernière qui a reçu une réponse de l'API l'écrit ;
-//   sessions/<id>.json    les sous-agents en cours de la session <id>.
-// Le moniteur vérifie `version` : tout changement de format la fait monter.
+// What this mod writes for Claude Session Monitor, in `<config>/session-monitor`:
+//   quota.json            the plan's quota, the same for every session: the last
+//                         one to get an answer from the API writes it;
+//   sessions/<id>.json    the running sub-agents of session <id>.
+// The monitor checks `version`: any change of format raises it.
 const VERSION = 1
 
-// Un sous-agent qui compte encore : `idle` est un coéquipier qui attend un message.
-const ACTIFS: readonly AgentInfo['status'][] = ['pending', 'running', 'waiting']
+// A sub-agent that still counts: `idle` is a teammate waiting for a message.
+const ACTIVE: readonly AgentInfo['status'][] = ['pending', 'running', 'waiting']
 
-// Le dernier contenu écrit pour cette session : rien à réécrire s'il ne change pas.
-let ecrit = ''
+// The last content written for this session: nothing to write if it is the same.
+let written = ''
 
-async function dossier($: EngineInterface) {
+async function folder($: EngineInterface) {
   const config = await $.env.get('CLAUDE_CONFIG_DIR')
   if (config) return `${config}/session-monitor`
-  const maison = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
-  if (maison === undefined) throw new Error('dossier personnel inconnu')
-  return `${maison}/.claude/session-monitor`
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+  if (home === undefined) throw new Error('home folder unknown')
+  return `${home}/.claude/session-monitor`
 }
 
-// `resetsAt` est une date ISO, le moniteur compte en millisecondes.
-function fenetre(limites: SessionRateLimit[], kind: string) {
-  const limite = limites.find(l => l.kind === kind)
-  if (limite === undefined) return undefined
+// `resetsAt` is an ISO date, the monitor counts in milliseconds.
+function window(limits: SessionRateLimit[], kind: string) {
+  const limit = limits.find(l => l.kind === kind)
+  if (limit === undefined) return undefined
 
-  const resetsAt = Date.parse(limite.resetsAt ?? '')
+  const resetsAt = Date.parse(limit.resetsAt ?? '')
   return {
-    percent: limite.percentUsed,
+    percent: limit.percentUsed,
     ...(Number.isNaN(resetsAt) ? {} : { resetsAt }),
   }
 }
 
-// Comme les fonctions d'écriture qui suivent, elle ne lève jamais : le moniteur
-// reste sur Desktop si ce mod n'écrit rien, et un échec ne doit pas gêner la
-// session observée. Le prochain événement réécrit tout.
-async function ecrireQuota($: EngineInterface, limites: SessionRateLimit[]) {
+// Like the write functions after it, it never throws: the monitor stays on
+// Desktop if this mod writes nothing, and a failure must not disturb the
+// session being observed. The next event writes everything again.
+async function writeQuota($: EngineInterface, limits: SessionRateLimit[]) {
   try {
-    const fiveHour = fenetre(limites, 'five_hour')
-    const sevenDay = fenetre(limites, 'seven_day')
+    const fiveHour = window(limits, 'five_hour')
+    const sevenDay = window(limits, 'seven_day')
     if (fiveHour === undefined && sevenDay === undefined) return
 
     const sampledAt = await $.clock.now()
     const quota = { version: VERSION, sampledAt, fiveHour, sevenDay }
-    await $.fs.write(`${await dossier($)}/quota.json`, JSON.stringify(quota))
+    await $.fs.write(`${await folder($)}/quota.json`, JSON.stringify(quota))
   } catch {
     return
   }
 }
 
-async function ecrireAgents($: EngineInterface, sessionId: string, liste: AgentInfo[]) {
+async function writeAgents($: EngineInterface, sessionId: string, list: AgentInfo[]) {
   try {
-    const agents = liste.map(({ id, description, type }) => ({ id, description, type }))
-    const texte = JSON.stringify({ version: VERSION, agents })
-    if (texte === ecrit) return
+    const agents = list.map(({ id, description, type }) => ({ id, description, type }))
+    const text = JSON.stringify({ version: VERSION, agents })
+    if (text === written) return
 
-    await $.fs.write(`${await dossier($)}/sessions/${sessionId}.json`, texte)
-    ecrit = texte
+    await $.fs.write(`${await folder($)}/sessions/${sessionId}.json`, text)
+    written = text
   } catch {
     return
   }
 }
 
-// `fini` : un agent dont la fin vient d'arriver, peut-être pas encore noté dans la liste.
-async function actualiserAgents($: EngineInterface, fini?: string) {
+// `finished`: an agent whose end just arrived, perhaps not yet marked in the list.
+async function refreshAgents($: EngineInterface, finished?: string) {
   try {
-    const liste = await $.agent.list()
-    const actifs = liste.filter(a => ACTIFS.includes(a.status) && a.id !== fini)
-    await ecrireAgents($, await $.session.id(), actifs)
+    const list = await $.agent.list()
+    const active = list.filter(a => ACTIVE.includes(a.status) && a.id !== finished)
+    await writeAgents($, await $.session.id(), active)
   } catch {
     return
   }
 }
 
-// Une session reprise repart de zéro : son processus précédent a pu mourir avec
-// des sous-agents encore notés.
-async function repartirDeZero($: EngineInterface) {
+// A resumed session starts from nothing: its previous process may have died
+// with sub-agents still on record.
+async function startClean($: EngineInterface) {
   try {
     const sessionId = await $.session.id()
-    if (await $.fs.exists(`${await dossier($)}/sessions/${sessionId}.json`)) {
-      await ecrireAgents($, sessionId, [])
+    if (await $.fs.exists(`${await folder($)}/sessions/${sessionId}.json`)) {
+      await writeAgents($, sessionId, [])
     }
   } catch {
     return
@@ -89,31 +89,31 @@ async function repartirDeZero($: EngineInterface) {
 
 export const register: Register = on => {
   on('session.measure', async ($, e, next) => {
-    const mesure = await next(e)
-    if (e.changed.includes('rateLimits')) await ecrireQuota($, e.rateLimits)
-    return mesure
+    const measure = await next(e)
+    if (e.changed.includes('rateLimits')) await writeQuota($, e.rateLimits)
+    return measure
   })
 
   on('session.start', async ($, e, next) => {
-    const debut = await next(e)
-    await repartirDeZero($)
-    return debut
+    const started = await next(e)
+    await startClean($)
+    return started
   })
 
   on('agent.spawn', async ($, e, next) => {
-    const lance = await next(e)
-    await actualiserAgents($)
-    return lance
+    const spawned = await next(e)
+    await refreshAgents($)
+    return spawned
   })
 
   on('turn.complete', async ($, e, next) => {
-    const fin = await next(e)
-    await actualiserAgents($, e.agentId)
-    return fin
+    const completed = await next(e)
+    await refreshAgents($, e.agentId)
+    return completed
   })
 
   on('session.end', async ($, e, next) => {
-    await ecrireAgents($, e.sessionId, [])
+    await writeAgents($, e.sessionId, [])
     return next(e)
   })
 }

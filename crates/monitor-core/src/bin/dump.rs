@@ -11,11 +11,11 @@ use monitor_core::model::{
 };
 
 const USAGE: &str = "\
-Usage : dump [--summary] [--watch] [--all]
-  (sans option)  instantané complet en JSON
-  --summary      une ligne par session
-  --watch        reste actif et affiche chaque nouvel instantané et ses transitions (Ctrl+C pour quitter)
-  --all          inclut les sessions lancées hors de Claude Desktop";
+Usage: dump [--summary] [--watch] [--all]
+  (no option)    full snapshot as JSON
+  --summary      one line per session
+  --watch        stays on and prints each new snapshot and its transitions (Ctrl+C to quit)
+  --all          includes the sessions started outside Claude Desktop";
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Options {
@@ -31,7 +31,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String>
             "--summary" => options.summary = true,
             "--watch" => options.watch = true,
             "--all" => options.all = true,
-            other => return Err(format!("Option inconnue : {other}")),
+            other => return Err(format!("Unknown option: {other}")),
         }
     }
     Ok(options)
@@ -70,21 +70,21 @@ fn once(settings: &Settings, summary: bool) -> ExitCode {
         match serde_json::to_string_pretty(&snapshot) {
             Ok(json) => json,
             Err(e) => {
-                eprintln!("Sérialisation impossible : {e}");
+                eprintln!("Could not serialize: {e}");
                 return ExitCode::FAILURE;
             }
         }
     };
     let mut out = io::stdout().lock();
     if let Err(e) = writeln!(out, "{text}").and_then(|()| out.flush()) {
-        eprintln!("Écriture impossible : {e}");
+        eprintln!("Could not write: {e}");
         return ExitCode::FAILURE;
     }
     if !snapshot.health.registry_ok {
         for error in &snapshot.health.errors {
             eprintln!("{error}");
         }
-        eprintln!("Registre des sessions illisible.");
+        eprintln!("Unreadable session registry.");
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
@@ -104,7 +104,7 @@ fn watch(settings: Settings) -> ExitCode {
         let mut out = io::stdout().lock();
         let written = writeln!(out, "{}", lines.join("\n")).and_then(|()| out.flush());
         if let Err(e) = written {
-            eprintln!("Écriture impossible : {e}");
+            eprintln!("Could not write: {e}");
         }
     });
     let _engine = Engine::start(settings, sink);
@@ -137,10 +137,10 @@ fn summary_lines(snapshot: &Snapshot) -> Vec<String> {
         None => "?",
     };
     let mut lines = vec![format!(
-        "{}{} session(s) : {} en attente, {} en erreur, {} non vue(s), {} en cours, {} inactive(s) \
-         | PR ouvertes {}, en échec {} | messages en attente {} \
-         | registre {} · desktop {} · gh {}",
-        if snapshot.ready { "" } else { "(pas encore lu) " },
+        "{}{} session(s): {} waiting, {} error, {} unseen, {} working, {} idle \
+         | PRs open {}, failing {} | messages awaiting {} \
+         | registry {} · desktop {} · gh {}",
+        if snapshot.ready { "" } else { "(not read yet) " },
         c.total,
         c.waiting,
         c.error,
@@ -160,44 +160,44 @@ fn summary_lines(snapshot: &Snapshot) -> Vec<String> {
     lines
 }
 
-/// `quota | relevé il y a … | 5 h … | 7 j …`, times relative to the snapshot.
+/// `quota | sampled … ago | 5 h … | 7 d …`, times relative to the snapshot.
 fn quota_line(snapshot: &Snapshot) -> Option<String> {
     let quota = snapshot.quota.as_ref()?;
     let now = snapshot.generated_at;
     let window = |label: &str, w: Option<&QuotaWindow>| match w {
         None => format!("{label} -"),
-        Some(w) if w.expired => format!("{label} {} % (réinitialisé depuis)", w.percent),
+        Some(w) if w.expired => format!("{label} {}% (reset since)", w.percent),
         Some(w) => match w.resets_at {
             Some(at) => format!(
-                "{label} {} % réinit. dans {} ±{}",
+                "{label} {}% resets in {} ±{}",
                 w.percent,
                 duration(at - now),
                 duration(w.reset_margin_ms)
             ),
-            None => format!("{label} {} % réinit. inconnue", w.percent),
+            None => format!("{label} {}% reset unknown", w.percent),
         },
     };
     Some(format!(
-        "quota | relevé il y a {} | {} | {}",
+        "quota | sampled {} ago | {} | {}",
         duration(now - quota.sampled_at),
         window("5 h", quota.five_hour.as_ref()),
-        window("7 j", quota.seven_day.as_ref()),
+        window("7 d", quota.seven_day.as_ref()),
     ))
 }
 
-/// "45 min", "4 h 12", "2 j 3 h".
+/// "45 min", "4 h 12", "2 d 3 h".
 fn duration(ms: i64) -> String {
     let minutes = ms.max(0) / 60_000;
     let (days, hours, mins) = (minutes / 1440, minutes / 60 % 24, minutes % 60);
     match (days, hours) {
         (0, 0) => format!("{mins} min"),
         (0, _) => format!("{hours} h {mins:02}"),
-        _ => format!("{days} j {hours} h"),
+        _ => format!("{days} d {hours} h"),
     }
 }
 
-/// `state | title | project/worktree @branch | waiting_for « question » | plan
-/// | activity | pr | messages`, then `| à l'écran` when Desktop shows it.
+/// `state | title | project/worktree @branch | waiting_for "question" | plan
+/// | activity | pr | messages`, then `| on screen` when Desktop shows it.
 fn session_line(s: &SessionView) -> String {
     let mut place = match &s.worktree {
         Some(worktree) => format!("{}/{worktree}", s.project),
@@ -208,13 +208,13 @@ fn session_line(s: &SessionView) -> String {
     }
     let mut waiting = s.waiting_for.clone().unwrap_or_else(|| "-".to_owned());
     if let Some(question) = &s.question {
-        waiting.push_str(&format!(" « {} »", shorten(&question.text, 80)));
+        waiting.push_str(&format!(" \"{}\"", shorten(&question.text, 80)));
     }
     let plan = match &s.plan {
         Some(p) => {
             let mut text = format!("plan {}/{}", p.done, p.total);
             if let Some(current) = &p.current {
-                text.push_str(&format!(" « {current} »"));
+                text.push_str(&format!(" \"{current}\""));
             }
             if p.wrapped_up {
                 text.push_str(" (clos)");
@@ -234,26 +234,26 @@ fn session_line(s: &SessionView) -> String {
                 .ok()
                 .and_then(|v| v.as_str().map(str::to_owned))
                 .unwrap_or_default();
-            let draft = if pr.is_draft { " brouillon" } else { "" };
+            let draft = if pr.is_draft { " draft" } else { "" };
             format!("PR #{} {}{draft} {checks}", pr.number, pr.state)
         }
         None => "PR -".to_owned(),
     };
     let m = &s.messages;
-    let screen = if s.on_screen { " | à l'écran" } else { "" };
-    let stopped = if s.stopped { " | arrêtée" } else { "" };
+    let screen = if s.on_screen { " | on screen" } else { "" };
+    let stopped = if s.stopped { " | stopped" } else { "" };
     let background = match &s.background {
         Some(wait) => {
             let kind = serde_json::to_value(wait.kind)
                 .ok()
                 .and_then(|v| v.as_str().map(str::to_owned))
                 .unwrap_or_default();
-            format!(" | attend {kind} « {} » ({})", shorten(&wait.summary, 60), wait.count)
+            format!(" | awaits {kind} \"{}\" ({})", shorten(&wait.summary, 60), wait.count)
         }
         None => String::new(),
     };
     format!(
-        "{:<7} | {} | {place} | {waiting} | {plan} | {activity} | {pr} | msg attente {} · non livrés {} · non lus {}{background}{stopped}{screen}",
+        "{:<7} | {} | {place} | {waiting} | {plan} | {activity} | {pr} | msg awaiting {} · undelivered {} · unread {}{background}{stopped}{screen}",
         state_name(s.state),
         s.title,
         m.awaiting_reply.len(),
@@ -273,14 +273,14 @@ fn shorten(text: &str, max: usize) -> String {
 }
 
 fn transition_line(t: &Transition) -> String {
-    let from = t.from.map_or("nouvelle", state_name);
+    let from = t.from.map_or("new", state_name);
     let reason = t
         .waiting_for
         .as_deref()
         .map(|w| format!(" ({w})"))
         .unwrap_or_default();
-    let screen = if t.on_screen { " [à l'écran]" } else { "" };
-    format!("  -> {} : {from} -> {}{reason}{screen}", t.title, state_name(t.to))
+    let screen = if t.on_screen { " [on screen]" } else { "" };
+    format!("  -> {}: {from} -> {}{reason}{screen}", t.title, state_name(t.to))
 }
 
 #[cfg(test)]
@@ -338,8 +338,8 @@ mod tests {
         let line = session_line(&view);
         assert_eq!(
             line,
-            "waiting | Dates relatives | atlas-web/wt-1 | input needed | plan 2/5 « Écrire les tests » \
-             | Bash: cargo test | PR #12 OPEN fail | msg attente 0 · non livrés 0 · non lus 0"
+            "waiting | Dates relatives | atlas-web/wt-1 | input needed | plan 2/5 \"Écrire les tests\" \
+             | Bash: cargo test | PR #12 OPEN fail | msg awaiting 0 · undelivered 0 · unread 0"
         );
         let with_git = SessionView {
             git: Some(GitInfo {
@@ -349,7 +349,7 @@ mod tests {
             ..view
         };
         assert!(session_line(&with_git).contains(" | atlas-web/wt-1 @feat/x | "));
-        assert!(!session_line(&with_git).ends_with("à l'écran"));
+        assert!(!session_line(&with_git).ends_with("on screen"));
 
         let asking = SessionView {
             waiting_for: Some("decision".into()),
@@ -363,15 +363,15 @@ mod tests {
             ..with_git
         };
         let line = session_line(&asking);
-        assert!(line.contains(" | decision « Pousser feat/6-lot et ouvrir la PR ? » | "), "{line}");
-        assert!(line.ends_with(" | à l'écran"), "{line}");
-        assert!(!line.contains("arrêtée"), "{line}");
+        assert!(line.contains(" | decision \"Pousser feat/6-lot et ouvrir la PR ?\" | "), "{line}");
+        assert!(line.ends_with(" | on screen"), "{line}");
+        assert!(!line.contains("stopped"), "{line}");
 
         let stopped = SessionView {
             stopped: true,
             ..asking
         };
-        assert!(session_line(&stopped).ends_with(" | arrêtée | à l'écran"));
+        assert!(session_line(&stopped).ends_with(" | stopped | on screen"));
     }
 
     #[test]
@@ -383,15 +383,15 @@ mod tests {
     #[test]
     fn summary_starts_with_counts_and_errors() {
         let mut snapshot = Snapshot::default();
-        snapshot.health.errors.push("Dossier introuvable : X".into());
+        snapshot.health.errors.push("Folder not found: X".into());
         snapshot.sessions.push(SessionView::default());
         let lines = summary_lines(&snapshot);
         assert_eq!(lines.len(), 3);
         assert!(lines[0].contains("gh ?"));
-        assert!(lines[0].starts_with("(pas encore lu) 0 session(s)"));
+        assert!(lines[0].starts_with("(not read yet) 0 session(s)"));
         snapshot.ready = true;
         assert!(summary_lines(&snapshot)[0].starts_with("0 session(s)"));
-        assert_eq!(lines[1], "! Dossier introuvable : X");
+        assert_eq!(lines[1], "! Folder not found: X");
         assert!(lines[2].starts_with("idle "));
     }
 
@@ -405,7 +405,7 @@ mod tests {
             waiting_for: None,
             ..Transition::default()
         };
-        assert_eq!(transition_line(&t), "  -> A : nouvelle -> working");
+        assert_eq!(transition_line(&t), "  -> A: new -> working");
         let t = Transition {
             from: Some(SessionState::Working),
             to: SessionState::Waiting,
@@ -414,12 +414,12 @@ mod tests {
         };
         assert_eq!(
             transition_line(&t),
-            "  -> A : working -> waiting (permission prompt)"
+            "  -> A: working -> waiting (permission prompt)"
         );
         let seen = Transition {
             on_screen: true,
             ..t
         };
-        assert!(transition_line(&seen).ends_with(" [à l'écran]"));
+        assert!(transition_line(&seen).ends_with(" [on screen]"));
     }
 }

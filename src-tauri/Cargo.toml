@@ -1,8 +1,10 @@
 [package]
 name = "claude-session-monitor"
 version = "0.1.0"
-description = "État en direct des sessions Claude Code de Claude Desktop"
+description = "Live status of the Claude Code sessions in Claude Desktop"
 authors = ["Alexis Crocilla"]
+license = "MIT"
+repository = "https://github.com/alexiscrocilla/claude-session-monitor"
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

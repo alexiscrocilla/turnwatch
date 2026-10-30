@@ -57,10 +57,16 @@ pub fn is_enabled(app: &AppHandle) -> bool {
 /// Turns the start with Windows on (for the running exe) or off.
 pub fn set(app: &AppHandle, enabled: bool) -> Result<(), String> {
     if !AVAILABLE {
-        return Err("indisponible dans une version de développement".to_owned());
+        let lang = monitor_core::i18n::current();
+        return Err(lang
+            .pick("unavailable in a development build", "indisponible dans une version de développement")
+            .to_owned());
     }
     let name = value_name(app);
-    let code = |code: u32| format!("erreur Windows {code}");
+    let code = |code: u32| {
+        monitor_core::i18n::current()
+            .pick(format!("Windows error {code}"), format!("erreur Windows {code}"))
+    };
     if enabled {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         registry::write_values(RUN_KEY, &[(name.as_str(), command(&exe))]).map_err(code)?;

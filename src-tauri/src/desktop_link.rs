@@ -32,9 +32,27 @@ pub fn session_link(key: &str) -> Option<String> {
 }
 
 /// Error for a session Claude Desktop cannot show (started in a terminal).
-pub const NOT_IN_DESKTOP: &str = "Cette session ne tourne pas dans Claude Desktop.";
-const DESKTOP_CLOSED: &str = "Claude Desktop n'est pas ouvert.";
-const NOT_SHOWN: &str = "Impossible d'afficher la fenêtre de Claude Desktop.";
+fn not_in_desktop() -> String {
+    message(
+        "This session does not run in Claude Desktop.",
+        "Cette session ne tourne pas dans Claude Desktop.",
+    )
+}
+
+fn desktop_closed() -> String {
+    message("Claude Desktop is not open.", "Claude Desktop n'est pas ouvert.")
+}
+
+fn not_shown() -> String {
+    message(
+        "Could not show Claude Desktop's window.",
+        "Impossible d'afficher la fenêtre de Claude Desktop.",
+    )
+}
+
+fn message(en: &str, fr: &str) -> String {
+    monitor_core::i18n::current().pick(en, fr).to_owned()
+}
 
 /// Shows the session `key` in Claude Desktop: hands its deep link to Desktop
 /// and raises Desktop's main window. `before_link` runs right before the link
@@ -50,7 +68,7 @@ pub fn open_session(
     let link = link_for(key)?;
     let windows = win::desktop_windows();
     if windows.is_empty() {
-        return Err(DESKTOP_CLOSED.into());
+        return Err(desktop_closed());
     }
 
     before_link();
@@ -63,7 +81,7 @@ pub fn open_session(
 /// The deep link to open for `key`, or the error for a session Desktop
 /// cannot show. Checked before anything touches Desktop.
 fn link_for(key: &str) -> Result<String, String> {
-    session_link(key).ok_or_else(|| NOT_IN_DESKTOP.to_owned())
+    session_link(key).ok_or_else(not_in_desktop)
 }
 
 /// What [`open_session`] reports once the link was tried and the window
@@ -74,7 +92,7 @@ fn outcome(linked: bool, focused: bool) -> Result<bool, String> {
     } else if focused {
         Ok(false)
     } else {
-        Err(NOT_SHOWN.into())
+        Err(not_shown())
     }
 }
 
@@ -242,7 +260,7 @@ mod tests {
         assert_eq!(outcome(true, true), Ok(true));
         assert_eq!(outcome(true, false), Ok(true), "Desktop may focus itself");
         assert_eq!(outcome(false, true), Ok(false), "raised, but not on the session");
-        assert_eq!(outcome(false, false), Err(NOT_SHOWN.to_owned()));
+        assert_eq!(outcome(false, false), Err(not_shown()));
     }
 
     #[test]
@@ -250,7 +268,7 @@ mod tests {
         // `open_session` checks this first, before enumerating Desktop's
         // windows, opening a link or running `before_link`.
         for key in ["cli:0171a9ec-7b19-487a-9495-893e41e304de", "local_", "", "local_a b"] {
-            assert_eq!(link_for(key), Err(NOT_IN_DESKTOP.to_owned()), "{key}");
+            assert_eq!(link_for(key), Err(not_in_desktop()), "{key}");
         }
         assert_eq!(
             link_for("local_cc5b463c-4454").as_deref(),

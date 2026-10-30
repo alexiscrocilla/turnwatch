@@ -18,8 +18,8 @@
 //!   there when the monitor started or the session came back.
 //!
 //! Several reminders due in the same [`Notifier::select`] or
-//! [`Notifier::tick`] are coalesced into one toast ("N sessions t'attendent
-//! toujours", their titles in the body) whose click shows the monitor's
+//! [`Notifier::tick`] are coalesced into one toast ("N sessions are still
+//! waiting for you", their titles in the body) whose click shows the monitor's
 //! window ([`SUMMARY_KEY`]). A single one names its session and opens it.
 //!
 //! Finished turns are only announced when `notify_on_finished` is on (off by
@@ -34,6 +34,7 @@
 
 use std::collections::HashMap;
 
+use monitor_core::i18n::{self, Lang};
 use monitor_core::model::{SessionState, SessionView, Settings, Snapshot, Transition};
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_notification::NotificationExt;
@@ -158,7 +159,7 @@ impl Notifier {
                 // A finished turn seen on screen was seen.
                 if self.first_announcement(transition, now_ms) && !transition.on_screen {
                     let session = snapshot.sessions.iter().find(|s| s.key == transition.key);
-                    toasts.push(toast(kind, transition, session));
+                    toasts.push(toast(kind, transition, session, i18n::current()));
                 }
                 continue;
             }
@@ -217,6 +218,7 @@ impl Notifier {
         if self.deferred.is_empty() || !snapshot.ready {
             return Vec::new();
         }
+        let lang = i18n::current();
         let mut due: Vec<(usize, Toast, String)> = Vec::new();
         let deferred = std::mem::take(&mut self.deferred);
         for (key, held) in deferred {
@@ -256,12 +258,12 @@ impl Notifier {
                 on_screen: false,
             };
             if self.first_announcement(&transition, now_ms) {
-                let name = display_name(&transition).to_owned();
-                due.push((index, toast(held.kind, &transition, Some(session)), name));
+                let name = display_name(&transition, lang).to_owned();
+                due.push((index, toast(held.kind, &transition, Some(session), lang), name));
             }
         }
         due.sort_by_key(|(index, _, _)| *index);
-        coalesce(due.into_iter().map(|(_, toast, name)| (toast, name)).collect())
+        coalesce(due.into_iter().map(|(_, toast, name)| (toast, name)).collect(), lang)
     }
 
     /// Records every listed wait, error and unseen turn as known, so seeing
@@ -356,32 +358,44 @@ fn is_probable_question(waiting_for: Option<&str>) -> bool {
 
 /// One toast per due reminder when there is only one, else a single toast
 /// listing the sessions (`name` of each), whose click shows the monitor.
-fn coalesce(due: Vec<(Toast, String)>) -> Vec<Toast> {
+fn coalesce(due: Vec<(Toast, String)>, lang: Lang) -> Vec<Toast> {
     if due.len() < 2 {
         return due.into_iter().map(|(toast, _)| toast).collect();
     }
     let names: Vec<String> = due.into_iter().map(|(_, name)| name).collect();
+    let count = names.len();
     vec![Toast {
         key: SUMMARY_KEY.to_owned(),
-        title: format!("{} sessions t'attendent toujours", names.len()),
+        title: lang.pick(
+            format!("{count} sessions are still waiting for you"),
+            format!("{count} sessions t'attendent toujours"),
+        ),
         body: one_line(&names.join(" · "), BODY_MAX_CHARS),
     }]
 }
 
-fn toast(kind: Kind, transition: &Transition, session: Option<&SessionView>) -> Toast {
-    let name = display_name(transition);
+fn toast(kind: Kind, transition: &Transition, session: Option<&SessionView>, lang: Lang) -> Toast {
+    let name = display_name(transition, lang);
     let (title, body) = match kind {
         Kind::Waiting => (
-            format!("{name} t'attend toujours"),
-            waiting_body(transition, session),
+            lang.pick(
+                format!("{name} is still waiting for you"),
+                format!("{name} t'attend toujours"),
+            ),
+            waiting_body(transition, session, lang),
         ),
         Kind::Error => (
-            format!("{name} : erreur"),
-            "Le dernier tour s'est arrêté sur une erreur".to_owned(),
+            lang.pick(format!("{name}: error"), format!("{name} : erreur")),
+            lang.pick(
+                "The last turn stopped on an error",
+                "Le dernier tour s'est arrêté sur une erreur",
+            )
+            .to_owned(),
         ),
         Kind::Finished => (
-            format!("{name} a terminé"),
-            "Résultat pas encore consulté".to_owned(),
+            lang.pick(format!("{name} finished"), format!("{name} a terminé")),
+            lang.pick("Result not looked at yet", "Résultat pas encore consulté")
+                .to_owned(),
         ),
     };
     Toast {
@@ -391,35 +405,36 @@ fn toast(kind: Kind, transition: &Transition, session: Option<&SessionView>) -> 
     }
 }
 
-fn display_name(transition: &Transition) -> &str {
+fn display_name(transition: &Transition, lang: Lang) -> &str {
     let title = transition.title.trim();
-    if title.is_empty() { "Une session" } else { title }
+    if title.is_empty() { lang.pick("A session", "Une session") } else { title }
 }
 
 /// The question the session ended its turn on, else the reason it waits.
-fn waiting_body(transition: &Transition, session: Option<&SessionView>) -> String {
+fn waiting_body(transition: &Transition, session: Option<&SessionView>, lang: Lang) -> String {
     let question = session
         .and_then(|s| s.question.as_ref())
         .map(|q| one_line(&q.text, BODY_MAX_CHARS))
         .filter(|text| !text.is_empty());
-    question.unwrap_or_else(|| waiting_reason(transition.waiting_for.as_deref()))
+    question.unwrap_or_else(|| waiting_reason(transition.waiting_for.as_deref(), lang))
 }
 
-/// French wording of the session's `waitingFor` value.
-pub fn waiting_reason(raw: Option<&str>) -> String {
-    match raw.map(str::trim) {
-        Some("input needed") => "Une question attend ta réponse".to_owned(),
-        Some("permission prompt") => "Une permission est demandée".to_owned(),
-        Some("sandbox request") => "Accès sandbox demandé".to_owned(),
-        Some("worker request") => "Un worker attend une réponse".to_owned(),
-        Some("dialog open") => "Une boîte de dialogue est ouverte".to_owned(),
-        Some("decision") => "Une décision est attendue".to_owned(),
-        Some("probable question") => "Question dans le dernier message".to_owned(),
-        Some("offer") => "Un choix de session est attendu".to_owned(),
-        Some("plan approval") => "Un plan attend ton approbation".to_owned(),
-        Some(other) if !other.is_empty() => other.to_owned(),
-        _ => "Action requise".to_owned(),
-    }
+/// Wording of the session's `waitingFor` value.
+pub fn waiting_reason(raw: Option<&str>, lang: Lang) -> String {
+    let (en, fr) = match raw.map(str::trim) {
+        Some("input needed") => ("A question is waiting for your answer", "Une question attend ta réponse"),
+        Some("permission prompt") => ("A permission is requested", "Une permission est demandée"),
+        Some("sandbox request") => ("Sandbox access requested", "Accès sandbox demandé"),
+        Some("worker request") => ("A worker is waiting for an answer", "Un worker attend une réponse"),
+        Some("dialog open") => ("A dialog is open", "Une boîte de dialogue est ouverte"),
+        Some("decision") => ("A decision is needed", "Une décision est attendue"),
+        Some("probable question") => ("Question in the last message", "Question dans le dernier message"),
+        Some("offer") => ("A choice of session is needed", "Un choix de session est attendu"),
+        Some("plan approval") => ("A plan is waiting for your approval", "Un plan attend ton approbation"),
+        Some(other) if !other.is_empty() => return other.to_owned(),
+        _ => ("Action needed", "Action requise"),
+    };
+    lang.pick(en, fr).to_owned()
 }
 
 /// `text` on one line, blanks collapsed, cut to `max` characters.
@@ -601,7 +616,7 @@ mod tests {
         assert!(notifier.select(&[], &with_quota(90.0), &Settings::default(), NOW).is_empty());
         let toasts = notifier.select(&[], &with_quota(95.0), &Settings::default(), NOW);
         assert_eq!(toasts.len(), 1);
-        assert_eq!(toasts[0].title, "Quota 5 h à 95 %");
+        assert_eq!(toasts[0].title, "5-hour quota at 95%");
         assert!(toasts[0].is_summary());
     }
 
@@ -662,8 +677,8 @@ mod tests {
             toasts,
             vec![Toast {
                 key: "a".into(),
-                title: "Session a t'attend toujours".into(),
-                body: "Une permission est demandée".into(),
+                title: "Session a is still waiting for you".into(),
+                body: "A permission is requested".into(),
             }]
         );
         assert!(!toasts[0].is_summary());
@@ -684,7 +699,7 @@ mod tests {
         assert!(notifier.select(std::slice::from_ref(&t), &snapshot, &Settings::default(), NOW).is_empty());
         let toasts = notifier.tick(&snapshot, &Settings::default(), DUE);
         assert_eq!(toasts.len(), 1);
-        assert_eq!(toasts[0].title, "Session a t'attend toujours");
+        assert_eq!(toasts[0].title, "Session a is still waiting for you");
         assert_eq!(toasts[0].body, "Pousser feat/6-lot et ouvrir la PR ?");
 
         // Without a question text, the reason is used.
@@ -692,7 +707,7 @@ mod tests {
         let mut notifier = primed();
         notifier.select(&[t], &snapshot, &Settings::default(), NOW);
         let toasts = notifier.tick(&snapshot, &Settings::default(), DUE);
-        assert_eq!(toasts[0].body, "Une décision est attendue");
+        assert_eq!(toasts[0].body, "A decision is needed");
     }
 
     #[test]
@@ -814,7 +829,7 @@ mod tests {
             toasts,
             vec![Toast {
                 key: SUMMARY_KEY.into(),
-                title: "3 sessions t'attendent toujours".into(),
+                title: "3 sessions are still waiting for you".into(),
                 body: "Session a · Session b · Session c".into(),
             }]
         );
@@ -831,7 +846,7 @@ mod tests {
             .collect();
         let toasts = announce(&mut notifier, &many, &all_on());
         assert_eq!(toasts.len(), 1);
-        assert_eq!(toasts[0].title, "40 sessions t'attendent toujours");
+        assert_eq!(toasts[0].title, "40 sessions are still waiting for you");
         assert_eq!(toasts[0].body.chars().count(), BODY_MAX_CHARS);
         assert!(toasts[0].body.ends_with('…'));
     }
@@ -875,19 +890,19 @@ mod tests {
         };
         let toasts = announce(&mut primed(), &all, &errors_only);
         assert_eq!(toasts.len(), 1);
-        assert_eq!(toasts[0].title, "Session c : erreur");
+        assert_eq!(toasts[0].title, "Session c: error");
 
         // Defaults: no finished toast, wait and error coalesced.
         let toasts = announce(&mut primed(), &all, &Settings::default());
         assert_eq!(toasts.len(), 1);
-        assert_eq!(toasts[0].title, "2 sessions t'attendent toujours");
+        assert_eq!(toasts[0].title, "2 sessions are still waiting for you");
 
         // Finished turns, when asked for, right away and on their own.
         let mut notifier = primed();
         let snapshot = listing(all.iter().map(view_of).collect());
         let at_once = notifier.select(&all, &snapshot, &all_on(), NOW);
         assert_eq!(at_once.len(), 1);
-        assert_eq!(at_once[0].title, "Session b a terminé");
+        assert_eq!(at_once[0].title, "Session b finished");
 
         // Turned off while held back: dropped.
         let mut notifier = primed();
@@ -1013,7 +1028,7 @@ mod tests {
             NOW,
         );
         assert_eq!(toasts.len(), 1);
-        assert_eq!(toasts[0].title, "Session c a terminé");
+        assert_eq!(toasts[0].title, "Session c finished");
     }
 
     #[test]
@@ -1030,7 +1045,7 @@ mod tests {
         );
         let toasts = notifier.select(std::slice::from_ref(&to_unseen), &empty(), &settings, NOW + 3_000);
         assert_eq!(toasts.len(), 1);
-        assert_eq!(toasts[0].title, "Session a a terminé");
+        assert_eq!(toasts[0].title, "Session a finished");
 
         // Too long after the turn: not a finish any more.
         let mut notifier = primed();
@@ -1057,7 +1072,7 @@ mod tests {
             &settings,
         );
         assert_eq!(toasts.len(), 1);
-        assert_eq!(toasts[0].title, "Session b : erreur");
+        assert_eq!(toasts[0].title, "Session b: error");
     }
 
     #[test]
@@ -1078,27 +1093,36 @@ mod tests {
     }
 
     #[test]
+    fn reasons_speak_english_too() {
+        assert_eq!(waiting_reason(Some("input needed"), Lang::En), "A question is waiting for your answer");
+        assert_eq!(waiting_reason(Some("plan approval"), Lang::En), "A plan is waiting for your approval");
+        assert_eq!(waiting_reason(Some("new reason"), Lang::En), "new reason");
+        assert_eq!(waiting_reason(None, Lang::En), "Action needed");
+    }
+
+    #[test]
     fn reasons_are_french_with_raw_fallback() {
-        assert_eq!(waiting_reason(Some("input needed")), "Une question attend ta réponse");
-        assert_eq!(waiting_reason(Some("sandbox request")), "Accès sandbox demandé");
-        assert_eq!(waiting_reason(Some("worker request")), "Un worker attend une réponse");
-        assert_eq!(waiting_reason(Some("dialog open")), "Une boîte de dialogue est ouverte");
-        assert_eq!(waiting_reason(Some("decision")), "Une décision est attendue");
+        assert_eq!(waiting_reason(Some("input needed"), Lang::Fr), "Une question attend ta réponse");
+        assert_eq!(waiting_reason(Some("sandbox request"), Lang::Fr), "Accès sandbox demandé");
+        assert_eq!(waiting_reason(Some("worker request"), Lang::Fr), "Un worker attend une réponse");
+        assert_eq!(waiting_reason(Some("dialog open"), Lang::Fr), "Une boîte de dialogue est ouverte");
+        assert_eq!(waiting_reason(Some("decision"), Lang::Fr), "Une décision est attendue");
         assert_eq!(
-            waiting_reason(Some("probable question")),
+            waiting_reason(Some("probable question"), Lang::Fr),
             "Question dans le dernier message"
         );
-        assert_eq!(waiting_reason(Some("offer")), "Un choix de session est attendu");
-        assert_eq!(waiting_reason(Some("plan approval")), "Un plan attend ton approbation");
-        assert_eq!(waiting_reason(Some("new reason")), "new reason");
-        assert_eq!(waiting_reason(None), "Action requise");
+        assert_eq!(waiting_reason(Some("offer"), Lang::Fr), "Un choix de session est attendu");
+        assert_eq!(waiting_reason(Some("plan approval"), Lang::Fr), "Un plan attend ton approbation");
+        assert_eq!(waiting_reason(Some("new reason"), Lang::Fr), "new reason");
+        assert_eq!(waiting_reason(None, Lang::Fr), "Action requise");
     }
 
     #[test]
     fn empty_title_gets_a_name() {
         let mut t = transition("a", Some(SessionState::Working), SessionState::Error);
         t.title = "  ".into();
-        assert_eq!(toast(Kind::Error, &t, None).title, "Une session : erreur");
+        assert_eq!(toast(Kind::Error, &t, None, Lang::En).title, "A session: error");
+        assert_eq!(toast(Kind::Error, &t, None, Lang::Fr).title, "Une session : erreur");
     }
 
     #[test]

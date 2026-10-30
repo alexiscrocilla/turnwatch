@@ -10,6 +10,7 @@ use std::time::SystemTime;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::i18n;
 use crate::model::{
     DesktopPrBinding, DesktopSession, ErrorMark, PeerReceipt, SessionRef, SideNote,
     TaskSuggestion, TurnSummary,
@@ -674,15 +675,16 @@ fn read_session(path: &Path) -> Option<DesktopSession> {
 }
 
 fn root_error(root: &Path, error: &std::io::Error) -> String {
+    let (root, lang) = (root.display(), i18n::current());
     if error.kind() == ErrorKind::NotFound {
-        format!(
-            "Dossier des sessions Claude Desktop introuvable : {}",
-            root.display()
+        lang.pick(
+            format!("Claude Desktop's sessions folder not found: {root}"),
+            format!("Dossier des sessions Claude Desktop introuvable : {root}"),
         )
     } else {
-        format!(
-            "Lecture impossible du dossier des sessions Claude Desktop {} : {error}",
-            root.display()
+        lang.pick(
+            format!("Could not read Claude Desktop's sessions folder {root}: {error}"),
+            format!("Lecture impossible du dossier des sessions Claude Desktop {root} : {error}"),
         )
     }
 }
@@ -1229,7 +1231,7 @@ mod tests {
         let tree = TempTree::new("missing");
         let mut index = DesktopIndex::new(tree.0.join("nope"));
         let error = index.refresh().expect_err("missing root");
-        assert!(error.contains("introuvable"), "{error}");
+        assert!(error.contains("not found"), "{error}");
 
         let file = tree.0.join("a-file");
         fs::write(&file, "x").expect("write");

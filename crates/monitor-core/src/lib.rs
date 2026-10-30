@@ -6,6 +6,7 @@ pub mod companion;
 pub mod desktop;
 pub mod engine;
 pub mod git_pr;
+pub mod i18n;
 pub mod model;
 pub mod paths;
 pub mod registry;
