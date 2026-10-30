@@ -230,6 +230,8 @@ pub struct TranscriptInfo {
     pub turn: Option<TurnInfo>,
     /// Latest prompt written by the person.
     pub last_human_prompt_at: Option<i64>,
+    /// The one before: two prompts since a moment when this one is later.
+    pub previous_human_prompt_at: Option<i64>,
     /// End of the latest turn started by the person or by the session's own
     /// background task, not by another session.
     pub notable_turn_ended_at: Option<i64>,
@@ -434,6 +436,9 @@ pub struct ProposedTask {
     pub session_title: String,
     /// Project of that session, as on its card.
     pub project: String,
+    /// The person wrote to that session twice since it was proposed: the card
+    /// no longer asks for attention.
+    pub passed_over: bool,
 }
 
 /// Plan usage, from the history Claude Desktop keeps

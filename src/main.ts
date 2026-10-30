@@ -3,6 +3,8 @@
 
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
+import { paintSprite, propOf } from "./sprites";
+import type { Prop } from "./sprites";
 import { CMD, EVENT_SETTINGS, EVENT_SNAPSHOT, EVENT_VISIBILITY } from "./types";
 import type {
   Counts,
@@ -415,6 +417,7 @@ function sanitizeTasks(v: unknown): ProposedTask[] {
       sessionKey,
       sessionTitle: oneLine(str(t.sessionTitle)) || "une session",
       project: str(t.project),
+      passedOver: t.passedOver === true,
     });
   }
   return out;
@@ -561,6 +564,7 @@ const ui = {
   btnPin: byId<HTMLButtonElement>("btn-pin"),
   btnHide: byId<HTMLButtonElement>("btn-hide"),
   compactDot: byId("compact-dot"),
+  compactSprite: byId("compact-sprite"),
   compactOpen: byId<HTMLButtonElement>("compact-open"),
   compactOpenTitle: byId("compact-open-title"),
   compactOpenReason: byId("compact-open-reason"),
@@ -621,6 +625,31 @@ interface CardEntry {
 }
 const cardEntries = new Map<string, CardEntry>();
 let descSeq = 0;
+
+/** What a session's character shows of its tools. */
+interface Walk {
+  /** The latest tool call: a new one is a step. */
+  mark: string;
+  steps: number;
+  /** Kept through the tools that are not work of their own (a plan update…). */
+  prop: Prop | null;
+}
+let walks = new Map<string, Walk>();
+
+function nextWalks(sessions: readonly SessionView[]): Map<string, Walk> {
+  const next = new Map<string, Walk>();
+  for (const s of sessions) {
+    const before = walks.get(s.key);
+    const a = s.activity;
+    const mark = a ? `${a.name}|${a.at ?? ""}|${a.summary}` : "";
+    next.set(s.key, {
+      mark,
+      steps: (before?.steps ?? 0) + (before && before.mark !== mark ? 1 : 0),
+      prop: (a && propOf(a.name)) ?? before?.prop ?? null,
+    });
+  }
+  return next;
+}
 
 // ---------------------------------------------------------------------------
 // Commands
@@ -831,7 +860,10 @@ const waitingText = (s: SessionView): string => s.question?.text ?? reasonText(s
 
 function renderCompact(rows: readonly HealthRow[]): void {
   const sessions = snapshot?.sessions ?? [];
-  ui.compactDot.className = `dot dot--${mostUrgent(sessions) ?? "none"}`;
+  const urgent = sessions.find((s) => s.state === mostUrgent(sessions));
+  ui.compactDot.hidden = urgent !== undefined;
+  ui.compactSprite.hidden = urgent === undefined;
+  if (urgent) paintSession(ui.compactSprite, urgent);
 
   // Health problems and failed commands: a warning button that opens the list.
   const problems = notice && noticeTone === "error" ? [...rows, { text: notice, tone: "error" as const }] : [...rows];
@@ -869,7 +901,7 @@ function renderCompact(rows: readonly HealthRow[]): void {
   let text = snapshot && isReady() ? summaryText(snapshot.counts) : pendingText();
   const prOpen = snapshot && isReady() ? snapshot.counts.prOpen : 0;
   if (prOpen > 0) text += ` · ${prOpen} PR`;
-  const tasks = snapshot && isReady() ? snapshot.proposedTasks.length : 0;
+  const tasks = listedTasks().filter((t) => !t.passedOver).length;
   if (tasks > 0) text += ` · ${tasksText(tasks)}`;
   setText(ui.compactSummary, text);
   ui.compactSummary.title = text;
@@ -1291,7 +1323,7 @@ function createGroup(): GroupEntry {
 function groupNeeds(g: Group): SummaryPart[] {
   const waiting = g.sessions.filter((s) => s.state === "waiting").length;
   const error = g.sessions.filter((s) => s.state === "error").length;
-  const tasks = g.tasks.length;
+  const tasks = g.tasks.filter((t) => !t.passedOver).length;
   const parts: SummaryPart[] = [];
   if (waiting) parts.push({ text: `${waiting} ${plural(waiting, "t'attend", "t'attendent")}`, tone: "waiting" });
   if (error) parts.push({ text: `${error} en erreur`, tone: "error" });
@@ -1328,7 +1360,7 @@ function place(parent: Element, el: Element, prev: Element | null): void {
 
 function renderList(): void {
   const sessions = snapshot?.sessions ?? [];
-  const tasks = snapshot && isReady() ? snapshot.proposedTasks : [];
+  const tasks = listedTasks();
   // Removing or moving a node blurs it: remember the focus by session key.
   const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const activeCard = active && ui.cards.contains(active) ? active.closest<HTMLElement>(".card") : null;
@@ -1380,31 +1412,49 @@ function renderList(): void {
       fillTaskCard(entry, t, nest);
       put(key, entry, nest.nested ? 2 : 1);
     };
+    const putFold = (key: string, onToggle: () => void, nest: Nest, hidden: readonly Member[], open: boolean): void => {
+      let entry = cardEntries.get(key);
+      if (!entry) {
+        entry = createFoldCard(key, onToggle);
+        cardEntries.set(key, entry);
+      }
+      fillFoldCard(entry, hidden, nest, open);
+      put(key, entry, nest.nested ? 2 : 1);
+    };
+    const putTaskFold = (scope: string, fold: TaskFold, nest: Nest): void =>
+      putFold(
+        taskFoldKey(scope),
+        () => toggleTasks(scope),
+        nest,
+        fold.rest.map((t) => ({ kind: "task", t })),
+        fold.open,
+      );
 
     for (const family of g.families) {
       const { root, members } = family;
       const open = !collapsedFamilies.includes(root.key);
+      const tasks = taskFold(root.key, members.flatMap((m) => (m.kind === "task" ? [m.t] : [])));
       // Folded, the sessions that need the person stay in view.
-      const shown = open ? members : members.filter((m) => m.kind === "session" && needsYou(m.s));
+      const shown = members.filter((m) =>
+        open ? m.kind === "session" || tasks.shown.includes(m.t) : m.kind === "session" && needsYou(m.s),
+      );
       const hidden = open ? [] : members.filter((m) => !shown.includes(m));
+      const moreTasks = open && tasks.rest.length > 0;
       putSession(root, { ...TOP, fold: members.length ? { key: root.key, open } : null });
       shown.forEach((m, i) => {
-        const nest: Nest = { nested: true, last: i === shown.length - 1 && hidden.length === 0, fold: null };
+        const last = i === shown.length - 1 && hidden.length === 0 && !moreTasks;
+        const nest: Nest = { nested: true, last, fold: null };
         if (m.kind === "session") putSession(m.s, nest);
         else putTask(m.t, nest);
       });
       if (hidden.length) {
-        const key = foldKey(root.key);
-        let entry = cardEntries.get(key);
-        if (!entry) {
-          entry = createFoldCard(root.key);
-          cardEntries.set(key, entry);
-        }
-        fillFoldCard(entry, hidden);
-        put(key, entry, 2);
+        putFold(foldKey(root.key), () => toggleFamily(root.key), NESTED_LAST, hidden, false);
       }
+      if (moreTasks) putTaskFold(root.key, tasks, NESTED_LAST);
     }
-    for (const t of g.loose) putTask(t, TOP);
+    const loose = taskFold(`group:${g.key}`, g.loose);
+    for (const t of loose.shown) putTask(t, TOP);
+    if (loose.rest.length) putTaskFold(`group:${g.key}`, loose, TOP);
   }
 
   for (const [key, entry] of cardEntries) {
@@ -1488,6 +1538,7 @@ interface Fold {
 }
 
 const TOP: Nest = { nested: false, last: false, fold: null };
+const NESTED_LAST: Nest = { nested: true, last: true, fold: null };
 
 const nestClass = (n: Nest): string =>
   n.nested ? ` card--nested${n.last ? " card--nested-last" : ""}` : "";
@@ -1504,6 +1555,19 @@ function fillCard(entry: CardEntry, s: SessionView, nest: Nest): void {
     tooltip: cardTooltip(s),
     sections: cardSections(s, nest.fold),
   });
+  // Not in the head's signature: a step must not rebuild the row and its PR chip.
+  const sprite = entry.parts.get("head")?.el.querySelector<HTMLElement>(".sprite");
+  if (sprite) paintSession(sprite, s);
+}
+
+function paintSession(el: HTMLElement, s: SessionView): void {
+  const walk = walks.get(s.key);
+  paintSprite(el, {
+    state: s.state,
+    prop: walk?.prop ?? null,
+    steps: walk?.steps ?? 0,
+    tentative: s.state === "waiting" && isTentative(s),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1515,14 +1579,22 @@ const FOLDED_STORE = "monitor.foldedFamilies";
 /** Oldest folds are forgotten past this many. */
 const FOLDED_MAX = 50;
 
-const collapsedFamilies: string[] = loadFolded();
+const collapsedFamilies: string[] = loadKeys(FOLDED_STORE, FOLDED_MAX);
 
-function loadFolded(): string[] {
+function loadKeys(store: string, max: number): string[] {
   try {
-    const raw: unknown = JSON.parse(localStorage.getItem(FOLDED_STORE) ?? "[]");
-    return Array.isArray(raw) ? raw.filter((k): k is string => typeof k === "string").slice(-FOLDED_MAX) : [];
+    const raw: unknown = JSON.parse(localStorage.getItem(store) ?? "[]");
+    return Array.isArray(raw) ? raw.filter((k): k is string => typeof k === "string").slice(-max) : [];
   } catch {
     return [];
+  }
+}
+
+function saveKeys(store: string, keys: readonly string[]): void {
+  try {
+    localStorage.setItem(store, JSON.stringify(keys));
+  } catch {
+    // Not kept: it lasts until the window reloads.
   }
 }
 
@@ -1531,31 +1603,26 @@ function toggleFamily(key: string): void {
   if (at >= 0) collapsedFamilies.splice(at, 1);
   else collapsedFamilies.push(key);
   collapsedFamilies.splice(0, Math.max(collapsedFamilies.length - FOLDED_MAX, 0));
-  try {
-    localStorage.setItem(FOLDED_STORE, JSON.stringify(collapsedFamilies));
-  } catch {
-    // Not kept: the fold lasts until the window reloads.
-  }
+  saveKeys(FOLDED_STORE, collapsedFamilies);
   scheduleRender();
 }
 
 /** Card key of a folded family's summary: never a session or task key. */
 const foldKey = (rootKey: string): string => `fold:${rootKey}`;
 
-/** The row standing for a folded family's hidden cards: a click unfolds it. */
-function createFoldCard(rootKey: string): CardEntry {
+/** The row standing for the cards folded away: a click shows or hides them. */
+function createFoldCard(key: string, onToggle: () => void): CardEntry {
   const el = h("div", "card");
   el.setAttribute("role", "listitem");
-  el.dataset.key = foldKey(rootKey);
+  el.dataset.key = key;
   const hit = h("button", "card-hit");
   hit.type = "button";
-  hit.setAttribute("aria-expanded", "false");
   const desc = h("span");
   desc.id = `card-desc-${++descSeq}`;
   desc.hidden = true;
   hit.setAttribute("aria-describedby", desc.id);
   el.append(hit, desc);
-  el.addEventListener("click", () => toggleFamily(rootKey));
+  el.addEventListener("click", onToggle);
   return { el, hit, desc, sig: "", parts: new Map() };
 }
 
@@ -1575,21 +1642,24 @@ function foldSummary(hidden: readonly Member[]): string {
   return parts.join(" · ");
 }
 
-function fillFoldCard(entry: CardEntry, hidden: readonly Member[]): void {
-  const summary = foldSummary(hidden);
-  const titles = hidden.map((m) => (m.kind === "session" ? m.s.title : `Tâche proposée : ${m.t.title}`));
+function fillFoldCard(entry: CardEntry, folded: readonly Member[], nest: Nest, open: boolean): void {
+  const summary = foldSummary(folded);
+  const titles = folded.map((m) => (m.kind === "session" ? m.s.title : `Tâche proposée : ${m.t.title}`));
+  const verb = open ? "Replier" : "Afficher";
+  const what = folded.some((m) => m.kind === "session") ? "les sessions imbriquées" : "ces tâches";
+  setAttr(entry.hit as HTMLElement, "aria-expanded", String(open));
   fillEntry(entry, {
-    className: "card card--fold card--action card--nested card--nested-last",
-    name: `Afficher ${summary.split(" · ").join(", ")}`,
+    className: `card card--fold card--action${nestClass(nest)}`,
+    name: `${verb} ${summary.split(" · ").join(", ")}`,
     description: titles.join(". "),
-    tooltip: [...titles, "Clic : afficher les sessions imbriquées"].join("\n"),
-    sections: [section("head", { summary }, buildFoldHead)],
+    tooltip: [...titles, `Clic : ${verb.toLowerCase()} ${what}`].join("\n"),
+    sections: [section("head", { summary: open ? `${verb} ${summary}` : summary, open }, buildFoldHead)],
   });
 }
 
-function buildFoldHead(m: { summary: string }): HTMLElement {
+function buildFoldHead(m: { summary: string; open: boolean }): HTMLElement {
   const head = h("div", "card-head");
-  const mark = h("span", "fold-mark");
+  const mark = h("span", m.open ? "fold-mark is-open" : "fold-mark");
   mark.append(icon("chevron"));
   head.append(mark, h("span", "card-title", m.summary));
   return head;
@@ -1650,6 +1720,61 @@ function fillEntry(entry: CardEntry, c: CardContent): void {
 const taskKey = (t: ProposedTask): string => `task:${t.id}`;
 
 const TASK_HINT = "Clic : ouvrir la session dans Claude Desktop, pour lancer ou écarter la tâche";
+const HIDE_TASK_HINT = "Pas pour moi : la masquer ici. Elle reste dans sa session, dans Claude Desktop";
+
+/** Cards set aside here, kept in this window's storage: Desktop still has them,
+ * and lost storage only shows them again. */
+const HIDDEN_TASKS_STORE = "monitor.hiddenTasks";
+/** Oldest ones are forgotten past this many. */
+const HIDDEN_TASKS_MAX = 200;
+
+const hiddenTasks: string[] = loadKeys(HIDDEN_TASKS_STORE, HIDDEN_TASKS_MAX);
+
+function hideTask(id: string): void {
+  if (!hiddenTasks.includes(id)) hiddenTasks.push(id);
+  hiddenTasks.splice(0, Math.max(hiddenTasks.length - HIDDEN_TASKS_MAX, 0));
+  saveKeys(HIDDEN_TASKS_STORE, hiddenTasks);
+  showNotice("Tâche masquée ici : elle reste dans sa session, dans Claude Desktop", "info");
+}
+
+/** The "New task" cards to show. */
+const listedTasks = (): ProposedTask[] =>
+  snapshot && isReady() ? snapshot.proposedTasks.filter((t) => !hiddenTasks.includes(t.id)) : [];
+
+/** Family roots and projects whose folded tasks are shown, until the window reloads. */
+const expandedTasks = new Set<string>();
+
+function toggleTasks(scope: string): void {
+  if (!expandedTasks.delete(scope)) expandedTasks.add(scope);
+  scheduleRender();
+}
+
+/** Card key of the row folding a family's or project's tasks: never a session or task key. */
+const taskFoldKey = (scope: string): string => `tasks:${scope}`;
+
+interface TaskFold {
+  shown: ProposedTask[];
+  /** All but the lead task: what the row after the cards folds. */
+  rest: ProposedTask[];
+  open: boolean;
+}
+
+/**
+ * One task at a time asks for attention, in a family or a project: the newest
+ * the person has not passed over. The others wait behind a row.
+ */
+function taskFold(scope: string, tasks: readonly ProposedTask[]): TaskFold {
+  const lead = tasks.reduce<ProposedTask | null>(
+    (best, t) => (!t.passedOver && (best === null || t.createdAt > best.createdAt) ? t : best),
+    null,
+  );
+  const open = expandedTasks.has(scope);
+  return {
+    shown: tasks.filter((t) => open || t === lead),
+    rest: tasks.filter((t) => t !== lead),
+    open,
+  };
+}
 
 /** A click opens the session that proposed the task, where its card is. */
 function createTaskCard(t: ProposedTask): CardEntry {
@@ -1672,6 +1797,7 @@ function fillTaskCard(entry: CardEntry, t: ProposedTask, nest: Nest): void {
   const lines = [`Tâche proposée : ${t.title}`];
   if (t.tldr) lines.push(clip(t.tldr, 300));
   lines.push(`Proposée par ${t.sessionTitle}, ${formatClock(t.createdAt)}`);
+  if (t.passedOver) lines.push("Repliée : tu as écrit deux fois à cette session depuis");
   if (t.expiresAt !== null && t.expiresAt <= t.listedUntil) {
     lines.push(`Desktop l'écarte ${formatWhen(t.expiresAt)} si elle n'est pas lancée`);
   } else {
@@ -1679,19 +1805,34 @@ function fillTaskCard(entry: CardEntry, t: ProposedTask, nest: Nest): void {
     lines.push(`Masquée ici ${formatWhen(t.listedUntil)} ; Desktop la garde jusqu'à ce que tu la lances ou l'écartes`);
   }
   lines.push(TASK_HINT);
+  // Under its session, the pitch or nothing: the session above says who proposed it.
+  const line = t.tldr ?? (nest.nested ? null : `Proposée par ${t.sessionTitle}`);
+  const head = section("head", { id: t.id, title: t.title, createdAt: t.createdAt }, buildTaskHead);
   fillEntry(entry, {
     className: `card card--task card--action${nestClass(nest)}`,
     name: `Tâche proposée : ${t.title}, par ${t.sessionTitle}. Ouvrir la session dans Claude Desktop`,
     description: t.tldr ?? "",
     tooltip: lines.join("\n"),
-    sections: [
-      section("head", { title: t.title, createdAt: t.createdAt }, buildTaskHead),
-      section("line", { by: t.sessionTitle }, (m) => h("div", "card-line", `Proposée par ${m.by}`)),
-    ],
+    sections: line === null ? [head] : [head, section("line", { line }, (m) => h("div", "card-line", m.line))],
   });
 }
 
-function buildTaskHead(m: { title: string; createdAt: number }): HTMLElement {
+function hideTaskButton(id: string, title: string): HTMLElement {
+  const button = h("button", "card-dismiss");
+  button.type = "button";
+  button.dataset.focus = "hide";
+  button.title = HIDE_TASK_HINT;
+  button.setAttribute("aria-label", `Masquer ici la tâche « ${title} »`);
+  button.append(icon("cross"));
+  button.addEventListener("click", (e) => {
+    // The card behind opens the session.
+    e.stopPropagation();
+    hideTask(id);
+  });
+  return button;
+}
+
+function buildTaskHead(m: { id: string; title: string; createdAt: number }): HTMLElement {
   const head = h("div", "card-head");
   const mark = h("span", "task-mark");
   mark.append(icon("plus"));
@@ -1701,7 +1842,7 @@ function buildTaskHead(m: { title: string; createdAt: number }): HTMLElement {
     " · ",
     sinceSpan(m.createdAt, "status-since", `Proposée ${formatClock(m.createdAt)}`),
   );
-  head.append(mark, h("span", "card-title", m.title), status);
+  head.append(mark, h("span", "card-title", m.title), status, hideTaskButton(m.id, m.title));
   return head;
 }
 
@@ -1843,7 +1984,7 @@ function cardTooltip(s: SessionView): string {
   return lines.join("\n");
 }
 
-// Line 1: dot, title, eye, CLI tag, open PR chip, "attend · 3 h".
+// Line 1: character, title, eye, CLI tag, open PR chip, "attend · 3 h".
 
 const STATE_SHORT: Record<SessionState, string> = {
   waiting: "attend",
@@ -1878,8 +2019,7 @@ const headModel = (s: SessionView, fold: Fold | null): HeadModel => {
 
 function buildHead(m: HeadModel): HTMLElement {
   const head = h("div", m.fold ? "card-head card-head--fold" : "card-head");
-  const dot = h("span", `dot dot--${m.state}`);
-  head.append(dot, h("span", "card-title", m.title));
+  head.append(h("span", "sprite"), h("span", "card-title", m.title));
   if (m.onScreen) {
     const eye = h("span", "card-eye");
     eye.title = ON_SCREEN_TOOLTIP;
@@ -2213,6 +2353,7 @@ function acceptSnapshot(raw: unknown, origin: "event" | "fetch"): void {
     if (origin === "fetch" && gotEvent && next.seq === snapshot.seq) return;
   }
   if (origin === "event") gotEvent = true;
+  walks = nextWalks(next.sessions);
   snapshot = next;
   fatalError = null;
   scheduleRender();

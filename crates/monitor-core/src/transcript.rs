@@ -316,6 +316,7 @@ struct TranscriptState {
     /// Number of turns started so far.
     turn_count: u64,
     last_human_prompt_at: Option<i64>,
+    previous_human_prompt_at: Option<i64>,
     notable_turn_ended_at: Option<i64>,
     pending_ask: Option<PendingQuestion>,
     /// The latest `wrap_up` call and what it replaced, restored if Desktop
@@ -538,7 +539,10 @@ impl TranscriptState {
             }
         }
         if origin == TurnOrigin::Human {
-            self.last_human_prompt_at = at.or(self.last_human_prompt_at);
+            if at.is_some() {
+                self.previous_human_prompt_at = self.last_human_prompt_at;
+                self.last_human_prompt_at = at;
+            }
             self.pending_ask = None;
             self.ask_undo = None;
             self.api_error = None;
@@ -841,6 +845,7 @@ impl TranscriptState {
                 closing_question: closing_question(&turn.closing_text),
             }),
             last_human_prompt_at: self.last_human_prompt_at,
+            previous_human_prompt_at: self.previous_human_prompt_at,
             notable_turn_ended_at: self.notable_turn_ended_at,
             pending_ask: self.pending_ask.clone(),
             api_error: self.api_error.as_ref().map(|(error, _)| error.clone()),
@@ -2806,6 +2811,21 @@ mod tests {
     }
 
     // --- turns -------------------------------------------------------------
+
+    #[test]
+    fn the_person_s_two_latest_prompts_are_kept() {
+        let lines = [
+            prompt("Un", Some("human"), &at(0)),
+            prompt("Deux", Some("human"), &at(1)),
+            // Neither a task nor another session writes for the person.
+            prompt("<task-notification>", Some("task-notification"), &at(2)),
+            prompt("Another Claude session sent a message", Some("peer"), &at(3)),
+            prompt("Trois", Some("human"), &at(4)),
+        ];
+        let info = info_of(&lines.join("\n"));
+        assert_eq!(info.last_human_prompt_at, parse_iso8601_ms(&at(4)));
+        assert_eq!(info.previous_human_prompt_at, parse_iso8601_ms(&at(1)));
+    }
 
     #[test]
     fn prompts_are_told_apart() {

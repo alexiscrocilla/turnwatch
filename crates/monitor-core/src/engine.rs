@@ -929,7 +929,12 @@ impl Readers {
             .collect();
         let mut transcripts = HashMap::new();
         if let Some(tracker) = &mut self.transcripts {
-            for id in &listed_ids {
+            let followed: HashSet<String> = listed_ids
+                .iter()
+                .cloned()
+                .chain(aggregate::proposing_sessions(now, desktop).map(str::to_owned))
+                .collect();
+            for id in &followed {
                 match guarded(|| tracker.update(id)) {
                     Ok(Some(info)) => {
                         transcripts.insert(id.clone(), info);
@@ -938,7 +943,7 @@ impl Readers {
                     Err(msg) => errors.push(internal_error("Transcriptions", &msg)),
                 }
             }
-            if let Err(msg) = guarded(|| tracker.retain(&listed_ids)) {
+            if let Err(msg) = guarded(|| tracker.retain(&followed)) {
                 errors.push(internal_error("Transcriptions", &msg));
             }
         }
@@ -2018,6 +2023,46 @@ mod tests {
             (change.from, change.to),
             (Some(SessionState::Working), SessionState::Unseen)
         );
+    }
+
+    #[test]
+    fn a_session_not_listed_tells_when_its_card_was_passed_over() {
+        let dir = TempDir::new("passed_over");
+        let now = paths::now_ms();
+        let session = serde_json::json!({
+            "sessionId": "local_p",
+            "cliSessionId": "s1",
+            "title": "Terminée",
+            "cwd": r"D:\Projets\démo",
+            "lastTurnEdgeAt": now - 30 * 60_000,
+            "lastFocusedAt": now - 10_000,
+            "completedTurns": 4,
+            "backgroundTaskSuggestions": [
+                {"id": "task_a", "title": "Une tâche", "createdAt": now - 3_600_000}
+            ]
+        });
+        dir.write("desktop/account/org/local_p.json", &session.to_string());
+        // Far ahead, so that both prompts come after the card.
+        let prompt = |text: &str, at: &str| {
+            serde_json::json!({
+                "type": "user", "uuid": text, "timestamp": at, "sessionId": "s1",
+                "message": {"role": "user", "content": text}
+            })
+            .to_string()
+        };
+        let transcript = [
+            prompt("Un", "2999-01-01T10:00:00.000Z"),
+            prompt("Deux", "2999-01-01T11:00:00.000Z"),
+        ];
+        dir.write("projects/D--Projets-demo/s1.jsonl", &format!("{}\n", transcript.join("\n")));
+
+        let (mut worker, published) = test_worker(&dir.0, None);
+        worker.recompute(false);
+
+        let published = lock(&published);
+        let snapshot = &published.last().expect("a snapshot").0;
+        assert!(snapshot.sessions.is_empty(), "seen and stopped: not listed");
+        assert!(snapshot.proposed_tasks[0].passed_over);
     }
 
     #[test]

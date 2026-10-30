@@ -4,7 +4,7 @@ Petite fenêtre Windows, toujours au premier plan, qui montre en direct l'état 
 
 Les sessions sont regroupées par projet, et les projets qui ont besoin de toi passent en premier. Chaque carte tient en une ou deux lignes :
 
-- l'état et sa durée (« attend · 3 h », « en cours · 12 s », « non vue · 5 min »), avec la PR si elle est ouverte, colorée selon la CI, et une petite flèche circulaire quand l'Auto-fix de Desktop la surveille ;
+- le personnage de la session, dont la pose dit l'état et ce qu'il tient l'outil en cours (voir **États**), puis l'état et sa durée (« attend · 3 h », « en cours · 12 s », « non vue · 5 min »), avec la PR si elle est ouverte, colorée selon la CI, et une petite flèche circulaire quand l'Auto-fix de Desktop la surveille ;
 - une seconde ligne seulement quand elle sert : la question posée si la session t'attend (« Plan à approuver : … » pour un plan), l'erreur, l'avancement de la liste de tâches (`3/7 · Écrire les tests`) pendant le travail, ou le bilan d'une revue de code qui vient de se terminer (« Revue : 13 résultats dont 5 confirmés »).
 
 Le reste est dans l'infobulle de la carte : branche, fichiers non commités, résumé du dernier tour, dernier outil, session parente, messages entre sessions.
@@ -44,22 +44,24 @@ pnpm tauri dev
 
 - **En-tête** : le résumé (« 1 t'attend · 4 au travail · 2 non vues »), puis trois boutons : mode compact, épingler au premier plan, masquer. Faire glisser l'en-tête déplace la fenêtre.
 - **Quota** : sous l'en-tête, une jauge par fenêtre du forfait, 5 heures et 7 jours. La barre fine montre la part utilisée (grise, ambre dès 75 %, rouge dès 90 %), la zone teintée de la même couleur derrière elle la part du temps écoulé dans la fenêtre : une barre qui dépasse sa zone consomme plus vite qu'un rythme régulier. Suivent le pourcentage et l'heure (ou le jour) de réinitialisation estimée. L'infobulle donne le détail et l'heure du relevé. Si Desktop n'a rien relevé depuis plus de 20 minutes, une ligne sous les jauges le dit et indique comment relancer le relevé (« Pas de relevé depuis 08:17 : clic droit sur l'icône de Claude Desktop pour le relancer ») ; une fenêtre réinitialisée depuis affiche « — ».
-- **Mode compact** : la fenêtre se réduit à une ligne de 44 px qui montre la session qui t'attend, sinon le résumé. Dès qu'une fenêtre du quota atteint 80 %, une pastille l'indique à droite (« 5 h 82 % »).
+- **Mode compact** : la fenêtre se réduit à une ligne de 44 px qui montre la session qui t'attend, sinon le résumé, avec le personnage de la session la plus urgente. Dès qu'une fenêtre du quota atteint 80 %, une pastille l'indique à droite (« 5 h 82 % »).
 - **Sessions imbriquées** : comme dans la barre latérale de Desktop, une session lancée depuis une autre (session parallèle, copie, ou carte « New task » lancée) s'affiche sous elle, en retrait, reliée par un trait. Tout est au même niveau sous la première session affichée de la lignée, même une petite-fille, et la famille va dans le groupe du projet de cette session, à la place de son membre le plus urgent : un enfant qui t'attend fait remonter son parent. Si aucune session de la lignée n'est affichée, la session reste seule, avec « Lancée depuis … » dans l'infobulle. Le chevron après le titre replie la famille : les sessions qui t'attendent ou sont en erreur restent visibles, une ligne résume les autres (« 2 sessions imbriquées · 1 en cours ») et un clic dessus déplie. Le repli est mémorisé dans la fenêtre.
-- **Tâches proposées** : les cartes « New task » qu'une session a proposées et que tu n'as encore ni lancées ni écartées apparaissent sous cette session quand elle est affichée, sinon dans le groupe de leur projet après ses sessions, en pointillés (« proposée · 2 h », « Proposée par … »). Un clic ouvre la session qui l'a proposée : c'est là, dans Desktop, qu'on lance ou écarte la carte, aucun lien ne permet de le faire de l'extérieur. Une carte n'est montrée que pendant 7 jours après sa proposition : c'est la durée de vie que Desktop donne à ses propositions, et le moniteur l'applique aussi aux anciennes cartes, que Desktop garde sans limite (l'infobulle dit laquelle des deux règles s'applique).
+- **Tâches proposées** : les cartes « New task » qu'une session a proposées et que tu n'as encore ni lancées ni écartées apparaissent sous cette session quand elle est affichée, sinon dans le groupe de leur projet après ses sessions, en pointillés (« proposée · 2 h »), avec leur argumentaire en seconde ligne. Une seule à la fois demande ton attention, par famille de sessions ou par projet : la plus récente. Les autres attendent derrière une ligne (« 2 tâches proposées ») qu'un clic déplie. Une tâche y passe aussi quand tu as écrit deux fois à sa session depuis qu'elle a été proposée sans la lancer : elle ne compte alors plus dans les tâches annoncées. Un clic sur la carte ouvre la session qui l'a proposée : c'est là, dans Desktop, qu'on lance ou écarte la carte, aucun lien ne permet de le faire de l'extérieur. La croix (« Pas pour moi ») masque la tâche dans le moniteur seulement, Desktop la garde. Ce choix est mémorisé dans la fenêtre. Une carte n'est montrée que pendant 7 jours après sa proposition : c'est la durée de vie que Desktop donne à ses propositions, et le moniteur l'applique aussi aux anciennes cartes, que Desktop garde sans limite (l'infobulle dit laquelle des deux règles s'applique).
 - **Clic sur une carte** : ouvre cette session dans Claude Desktop (lien `claude://code/continue?session=local_…`, le même que celui de la liste de raccourcis de Desktop) et la marque comme vue.
 - **Clic sur la pastille de PR** : ouvre la PR dans le navigateur. Quand l'Auto-fix de Desktop surveille la PR (flèche circulaire), Desktop relance lui-même la session si la CI échoue, en cas de conflit ou de commentaire de revue. Tant que la session travaille sur une CI rouge ou un conflit, l'infobulle dit « Auto-fix s'en charge ». Desktop ne la relance qu'une fois par échec : si elle t'attend, s'arrête sur une erreur ou finit sans avoir réglé le problème, c'est à toi de voir. L'état vient de la carte de PR que Desktop garde pour la session, avec la même règle que lui (PR ouverte, sur GitHub, ni écartée ni héritée d'une session copiée), et n'est montré que si Desktop tourne.
 - **Icône de la zone de notification** : sa couleur suit la session la plus urgente, et son infobulle donne le résumé, puis le quota sur une seconde ligne. Un clic affiche ou masque la fenêtre. Le menu permet de changer les réglages, de lancer le moniteur au démarrage de Windows et de quitter. Masquer la fenêtre ne ferme pas l'application.
 
 ### États
 
-| Pastille | État | Signification |
+| Personnage | État | Signification |
 |---|---|---|
-| Ambre | Attend | La session est bloquée sur toi : permission, question, boîte de dialogue, ou tour terminé sur une question (« Décision attendue »). |
-| Rouge | Erreur | Le dernier tour s'est arrêté sur une erreur (celle que Desktop affiche, ou une erreur d'API). |
-| Bleue | Non vue | Le tour est fini et tu n'as pas regardé la session depuis. |
-| Verte | Au travail | Claude est en train de travailler. |
-| Grise | Inactive | Rien en cours, déjà vue. |
+| Pince levée, « ? » ambre | Attend | La session est bloquée sur toi : permission, question, boîte de dialogue, ou tour terminé sur une question (« Décision attendue »). Le « ? » est pâle quand la question est seulement devinée. |
+| Contrarié, « ! » rouge | Erreur | Le dernier tour s'est arrêté sur une erreur (celle que Desktop affiche, ou une erreur d'API). |
+| Drapeau bleu | Non vue | Le tour est fini et tu n'as pas regardé la session depuis. |
+| Sur ses pattes, un outil en main | Au travail | Claude est en train de travailler. |
+| Gris, les yeux fermés | Inactive | Rien en cours, déjà vue. |
+
+Au travail, le personnage tient ce que fait la session : un stylo pour une modification, une clé pour une commande, une loupe pour une lecture ou une recherche, un globe pour le web, et un petit crabe l'accompagne quand elle lance un sous-agent. Il fait un pas à chaque appel d'outil et ne bouge pas entre deux : il n'y a aucune animation en continu, qui ferait travailler WebView2 toute la journée. Le pas est supprimé si Windows demande de réduire les animations.
 
 Comment ces états sont décidés :
 
@@ -79,7 +81,7 @@ Tout est lu sur la machine, en lecture seule. Le seul accès réseau passe par `
 |---|---|---|
 | `~\.claude\sessions\<pid>.json` | Sessions vivantes, état, raison de l'attente (une session Desktop sans fichier ici est en pause) | Non (même contenu que `claude agents --json`, qui est officiel) |
 | `%APPDATA%\Claude\claude-code-sessions\…\local_<id>.json` | Titre, archivage, dernier passage, résumé du tour, PR liée par Desktop et son Auto-fix, messages entre sessions, session parente, cartes « New task » en attente | Non |
-| `~\.claude\projects\…\<id>.jsonl` | Outil en cours, liste de tâches, question de fin de tour, erreurs d'API, branche, dernier message, plan à approuver, résultats de revue | Non |
+| `~\.claude\projects\…\<id>.jsonl` | Outil en cours, liste de tâches, question de fin de tour, erreurs d'API, branche, dernier message, plan à approuver, résultats de revue, tes messages depuis une tâche proposée | Non |
 | `%APPDATA%\Claude\claude_desktop_config.json` | Sessions affichées dans les volets de Desktop | Non |
 | `%APPDATA%\Claude\plan-usage-history.json` | Quota du forfait (fenêtres de 5 h et de 7 jours), tel que Desktop l'a relevé | Non |
 | `git` dans le dossier de la session | Branche, fichiers non commités | Oui |

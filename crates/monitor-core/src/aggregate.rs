@@ -7,8 +7,8 @@ use std::collections::{HashMap, HashSet};
 use crate::model::{
     ChecksState, Counts, DesktopSession, ErrorMark, GitInfo, MessageSummary, PeerLink,
     PeerReceipt, PendingQuestion, PrInfo, ProposedTask, RegistryEntry, SessionRef, SessionState,
-    SessionView, Settings, Snapshot, SourceHealth, ToolActivity, TranscriptInfo, Transition,
-    TurnOrigin,
+    SessionView, Settings, Snapshot, SourceHealth, TaskSuggestion, ToolActivity, TranscriptInfo,
+    Transition, TurnOrigin,
 };
 use crate::transcript::plain_text;
 
@@ -136,7 +136,6 @@ pub fn build_snapshot(input: &AggregateInput) -> Snapshot {
 /// the session's folder and git root, so it stays in its group when the
 /// session leaves the list.
 fn proposed_tasks(input: &AggregateInput, sessions: &[SessionView]) -> Vec<ProposedTask> {
-    let since = input.now_ms.saturating_sub(PROPOSAL_WINDOW_MS);
     let mut tasks = Vec::new();
     for desktop in input.desktop.values().filter(|d| !d.is_archived) {
         let key = desktop.host_session_id.trim();
@@ -144,13 +143,13 @@ fn proposed_tasks(input: &AggregateInput, sessions: &[SessionView]) -> Vec<Propo
             continue;
         }
         let view = sessions.iter().find(|s| s.key == key);
+        let second_last_prompt = desktop
+            .cli_session_id
+            .as_deref()
+            .and_then(|id| input.transcripts.get(id.trim()))
+            .and_then(|t| t.previous_human_prompt_at);
         let cwd = desktop.cwd.as_deref().unwrap_or_default();
-        let pending = desktop.suggestions.iter().filter(|s| {
-            !s.offer
-                && !s.auto_start
-                && s.created_at >= since
-                && s.expires_at.is_none_or(|at| at > input.now_ms)
-        });
+        let pending = desktop.suggestions.iter().filter(|s| is_listed_card(s, input.now_ms));
         for suggestion in pending {
             let title = plain_text(&suggestion.title, TASK_TITLE_MAX);
             if title.is_empty() {
@@ -182,6 +181,7 @@ fn proposed_tasks(input: &AggregateInput, sessions: &[SessionView]) -> Vec<Propo
                 session_key: key.to_owned(),
                 session_title,
                 project,
+                passed_over: second_last_prompt.is_some_and(|at| at > suggestion.created_at),
             });
         }
     }
@@ -192,6 +192,28 @@ fn proposed_tasks(input: &AggregateInput, sessions: &[SessionView]) -> Vec<Propo
             .then_with(|| a.id.cmp(&b.id))
     });
     tasks
+}
+
+/// A card the person may still start, recent enough to be listed.
+fn is_listed_card(suggestion: &TaskSuggestion, now_ms: i64) -> bool {
+    !suggestion.offer
+        && !suggestion.auto_start
+        && suggestion.created_at >= now_ms.saturating_sub(PROPOSAL_WINDOW_MS)
+        && suggestion.expires_at.is_none_or(|at| at > now_ms)
+}
+
+/// CLI ids of the sessions with a listed card, whether the sessions are listed
+/// or not: [`proposed_tasks`] reads in their transcripts if the card was passed over.
+pub fn proposing_sessions<'a>(
+    now_ms: i64,
+    desktop: &'a HashMap<String, DesktopSession>,
+) -> impl Iterator<Item = &'a str> {
+    desktop
+        .values()
+        .filter(move |d| !d.is_archived && d.suggestions.iter().any(|s| is_listed_card(s, now_ms)))
+        .filter_map(|d| d.cli_session_id.as_deref())
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
 }
 
 /// State changes between two snapshots, sessions that appeared included.
@@ -2793,6 +2815,32 @@ mod tests {
         });
         assert!(f.keys().is_empty());
         assert!(f.snapshot().proposed_tasks.is_empty(), "offers are not cards");
+    }
+
+    #[test]
+    fn a_card_is_passed_over_once_the_person_wrote_twice_since() {
+        let mut f = Fixture::new();
+        f.file(DesktopSession {
+            suggestions: vec![card("task_new", NOW - HOUR), card("task_old", NOW - 3 * HOUR)],
+            cli_session_id: Some("cli-quiet".to_owned()),
+            ..desk("local_quiet")
+        });
+        f.transcripts.insert(
+            "cli-quiet".to_owned(),
+            TranscriptInfo {
+                last_human_prompt_at: Some(NOW - 10 * MIN),
+                previous_human_prompt_at: Some(NOW - 2 * HOUR),
+                ..TranscriptInfo::default()
+            },
+        );
+        let s = f.snapshot();
+        let passed: Vec<(&str, bool)> =
+            s.proposed_tasks.iter().map(|t| (t.id.as_str(), t.passed_over)).collect();
+        assert_eq!(passed, [("task_new", false), ("task_old", true)]);
+
+        // Their transcripts are read even when the sessions are not listed.
+        let ids: Vec<&str> = proposing_sessions(NOW, &f.desktop).collect();
+        assert_eq!(ids, ["cli-quiet"]);
     }
 
     #[test]

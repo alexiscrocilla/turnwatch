@@ -30,6 +30,15 @@ export interface MockBackend {
 
 /** Delay between two scripted changes of the demo. */
 const STEP_MS = 5_000;
+/** One tool per kind of thing a character holds, the last one holding nothing new. */
+const TOOLS: ReadonlyArray<readonly [name: string, summary: string]> = [
+  ["Edit", "src/settings/SettingsForm.ts"],
+  ["Bash", "pnpm test --filter web"],
+  ["Grep", '"useSettings" src/ --type ts'],
+  ["WebFetch", "https://exemple.org/docs/formulaires"],
+  ["Agent", "Audit du formulaire"],
+  ["update_plan", ""],
+];
 /** Simulated IPC latency. */
 const LATENCY_MS = 30;
 /** The engine's first pass: until then snapshots are not ready. */
@@ -174,6 +183,7 @@ const mockTasks = (): ProposedTask[] => [
     sessionKey: K.dates,
     sessionTitle: TITLE_DATES,
     project: "carnet",
+    passedOver: false,
   },
   {
     id: "task_8c9d0e1f",
@@ -185,6 +195,33 @@ const mockTasks = (): ProposedTask[] => [
     sessionKey: K.settings,
     sessionTitle: TITLE_SETTINGS,
     project: "atlas-web",
+    passedOver: false,
+  },
+  // A second card of the family: it waits behind a row.
+  {
+    id: "task_2d3e4f5a",
+    title: "Aligner les libellés du formulaire",
+    tldr: "Les sections n'utilisent pas toutes la même largeur de libellé.",
+    createdAt: ago(40 * 60),
+    expiresAt: Date.now() + 7 * 24 * HOUR_MS,
+    listedUntil: Date.now() + 7 * 24 * HOUR_MS,
+    sessionKey: K.settings,
+    sessionTitle: TITLE_SETTINGS,
+    project: "atlas-web",
+    passedOver: false,
+  },
+  // The person wrote to the session twice since: folded away, without asking for attention.
+  {
+    id: "task_6b7c8d9e",
+    title: "Supprimer l'ancien écran de préférences",
+    tldr: null,
+    createdAt: ago(2 * 3600),
+    expiresAt: null,
+    listedUntil: ago(2 * 3600) + 7 * 24 * HOUR_MS,
+    sessionKey: K.settings,
+    sessionTitle: TITLE_SETTINGS,
+    project: "atlas-web",
+    passedOver: true,
   },
   {
     id: "task_4e5f6a7b",
@@ -197,6 +234,7 @@ const mockTasks = (): ProposedTask[] => [
     sessionKey: "local_mock-0099-docs",
     sessionTitle: "Mettre à jour la documentation",
     project: "guide-utilisateur",
+    passedOver: false,
   },
 ];
 
@@ -702,9 +740,18 @@ export function createMockBackend(): MockBackend {
     publish();
   }, READY_MS);
 
+  /** Working sessions go on calling tools: their characters step and change hands. */
+  const walk = (): void => {
+    const [name, summary] = TOOLS[step % TOOLS.length];
+    for (const s of sessions) {
+      if (s.state === "working") s.activity = act(name, summary, 1);
+    }
+  };
+
   if (scenario !== "empty") {
     window.setInterval(() => {
       steps[step % steps.length]();
+      walk();
       step += 1;
       publish();
     }, STEP_MS);

@@ -194,6 +194,8 @@ export interface ProposedTask {
   sessionTitle: string;
   /** Project of that session, as on its card. */
   project: string;
+  /** The person wrote to that session twice since: it no longer asks for attention. */
+  passedOver: boolean;
 }
 
 /** Plan usage, from the history Claude Desktop keeps. */

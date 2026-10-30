@@ -13,6 +13,9 @@
   --merged: #8b5cf6;
   --idle: #8c8c8c;
 
+  /* Width of what starts a card's first line: its character, or a task's mark. */
+  --mark: 30px;
+
   /* Light theme. */
   --bg: #f3f3f3;
   --card: #ffffff;
@@ -607,9 +610,9 @@ button {
 }
 
 /* Nested under the session it comes from, as in Desktop's sidebar: one level,
-   joined by a line that drops from under the root's dot (18 px from the
-   list's edge: 1 px border, 12 px padding, half the dot) and turns into each
-   card. The line runs outside the card, across the gap above it. */
+   joined by a line that drops from under the root's character (18 px from the
+   list's edge) and turns into each card. The line runs outside the card,
+   across the gap above it. */
 .card--nested {
   margin-left: 28px;
 }
@@ -618,7 +621,7 @@ button {
 .card--nested::after {
   content: "";
   position: absolute;
-  /* 28 px of indent and 1 px of border back to the dot's axis. */
+  /* 28 px of indent and 1 px of border back to the line's axis. */
   left: -11px;
   width: 10px;
   pointer-events: none;
@@ -707,9 +710,9 @@ button {
   color: var(--text-muted);
 }
 
-/* In the dot's place, like the task mark. */
+/* In the character's place, like the task mark. */
 .fold-mark {
-  flex: 0 0 10px;
+  flex: 0 0 var(--mark);
   min-width: 0;
   display: inline-flex;
   justify-content: center;
@@ -720,6 +723,10 @@ button {
   width: 14px;
   height: 14px;
   stroke-width: 1.75;
+}
+
+.fold-mark.is-open .icon {
+  transform: rotate(90deg);
 }
 
 /* Only cards that open something react to the pointer. */
@@ -777,10 +784,9 @@ button {
   font-weight: 400;
 }
 
-/* In the dot's place, so line 2 stays aligned with the title: 10 px wide,
-   the larger icon overflowing evenly on both sides. */
+/* In the character's place, so line 2 stays aligned with the title. */
 .task-mark {
-  flex: 0 0 10px;
+  flex: 0 0 var(--mark);
   min-width: 0;
   display: inline-flex;
   justify-content: center;
@@ -790,6 +796,33 @@ button {
 .task-mark .icon {
   width: 14px;
   height: 14px;
+  stroke-width: 1.75;
+}
+
+/* "Pas pour moi": line 1's height, a 24 px target that does not grow the row. */
+.card-dismiss {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: 0 -6px 0 -6px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+}
+
+.card-dismiss:hover {
+  color: var(--text);
+  background: var(--card-press);
+}
+
+.card-dismiss .icon {
+  width: 12px;
+  height: 12px;
   stroke-width: 1.75;
 }
 
@@ -894,31 +927,82 @@ button {
   background: var(--idle);
 }
 
-.dot--waiting {
-  background: var(--waiting);
-}
-
-.dot--error {
-  background: var(--error);
-}
-
-.dot--unseen {
-  background: var(--unseen);
-}
-
-.dot--working {
-  background: var(--working);
-}
-
 .dot--none {
   background: transparent;
   box-shadow: inset 0 0 0 1.5px var(--idle);
 }
 
-/* A static halo rather than a pulse: an endless animation keeps WebView2
-   repainting (about a fifth of a CPU core) in a window that stays open all day. */
-.dot--working {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--working) 28%, transparent);
+/* The session's character (src/sprites.ts), on a 15 × 11 grid of 2 px cells. It
+   takes one step per tool call and never animates: an endless animation keeps
+   WebView2 repainting (about a fifth of a CPU core) in a window that stays open
+   all day. */
+.sprite {
+  flex: 0 0 var(--mark);
+  width: var(--mark);
+  height: 22px;
+}
+
+.sprite svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* Drags and clicks land on what is behind the drawing. */
+  pointer-events: none;
+}
+
+.sp-body {
+  fill: #d97757;
+}
+
+.sprite--idle .sp-body {
+  fill: var(--idle);
+}
+
+.sp-ink {
+  fill: #1f1e1d;
+}
+
+.sp-prop {
+  fill: var(--text-faint);
+}
+
+.sp-tip {
+  fill: var(--accent);
+}
+
+.sp-glass {
+  fill: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.sp-sign {
+  fill: var(--waiting);
+}
+
+.sprite.is-tentative .sp-sign {
+  opacity: 0.55;
+}
+
+.sp-alert {
+  fill: var(--error);
+}
+
+.sp-flag {
+  fill: var(--unseen);
+}
+
+.sprite[data-step="0"] .sp-step-b,
+.sprite[data-step="1"] .sp-step-a {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sprite[data-step] .sp-step-a {
+    display: inline;
+  }
+
+  .sprite[data-step] .sp-step-b {
+    display: none;
+  }
 }
 
 .icon {
@@ -932,10 +1016,10 @@ button {
   stroke-linejoin: round;
 }
 
-/* Line 2, aligned with the title past the dot. */
+/* Line 2, aligned with the title past the character. */
 .card-line {
   min-width: 0;
-  margin-left: 20px;
+  margin-left: calc(var(--mark) + 10px);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
