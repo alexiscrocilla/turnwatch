@@ -15,6 +15,12 @@ target/
 dist-ssr
 *.local
 
+# Claude Code: one person's settings and worktrees, and the types its engine
+# lays next to a mod
+.claude/settings.local.json
+.claude/worktrees/
+mod/*/.claude-plugin/types/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

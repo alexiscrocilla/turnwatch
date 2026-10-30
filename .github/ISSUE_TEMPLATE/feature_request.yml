@@ -1,0 +1,20 @@
+name: Idea
+description: Something the monitor could do
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The monitor shows current work only, stays read-only and makes no network call of its own: see [what the project is](https://github.com/alexiscrocilla/claude-session-monitor/blob/main/CONTRIBUTING.md#what-the-project-is).
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you were trying to do, and what got in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: What the monitor could do about it.

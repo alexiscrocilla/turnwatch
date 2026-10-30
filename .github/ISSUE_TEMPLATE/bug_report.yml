@@ -1,0 +1,63 @@
+name: Bug report
+description: Something shows wrong, or does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Keep private things out of this issue.** Session titles, transcripts, folder paths and project names are public here. For a security problem, use the Security tab instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to reproduce it
+      description: The steps, if you know them. "It happens from time to time" is fine too.
+  - type: input
+    id: monitor
+    attributes:
+      label: Claude Session Monitor version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: desktop
+    attributes:
+      label: Claude Desktop version
+      description: The monitor reads Desktop's internal files, so an update of Desktop is the first suspect.
+      placeholder: "4.4212"
+    validations:
+      required: true
+  - type: input
+    id: claude-code
+    attributes:
+      label: Claude Code version
+      description: The folder name under %APPDATA%\Claude\claude-code.
+      placeholder: "2.1.309"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: "Windows 11 24H2"
+  - type: dropdown
+    id: companion
+    attributes:
+      label: Companion mod
+      options:
+        - Installed
+        - Not installed
+        - I don't know
+  - type: textarea
+    id: dump
+    attributes:
+      label: Diagnostic output
+      description: |
+        Optional. `cargo run --manifest-path crates/monitor-core/Cargo.toml --bin dump -- --summary` shows what the app reads. It holds your session titles and folder paths: replace them before you paste it here.
+      render: text

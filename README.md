@@ -1,38 +1,52 @@
 # Claude Session Monitor
 
-Petite fenêtre Windows, toujours au premier plan, qui montre en direct l'état des sessions Claude Code lancées depuis l'onglet Code de Claude Desktop. L'idée : réduire Claude Desktop et ne garder à l'écran que ce qui compte, c'est-à-dire la session qui t'attend, sinon un simple résumé.
+A small always-on-top Windows window that shows, live, the state of the Claude Code sessions started from the Code tab of Claude Desktop. The idea: minimize Claude Desktop and keep on screen only what matters, which is the session waiting for you, or else a short summary.
 
-Les sessions sont regroupées par projet, et les projets qui ont besoin de toi passent en premier. Chaque carte tient en une ou deux lignes :
+<p align="center">
+  <img src="docs/preview.png" alt="The monitor's window: sessions grouped by project, each with a pixel crab showing its state, under the plan's quota gauges" width="380">
+</p>
 
-- le personnage de la session, dont la pose dit l'état et ce qu'il tient l'outil en cours (voir **États**), puis l'état et sa durée (« attend · 3 h », « en cours · 12 s », « non vue · 5 min »), avec la PR si elle est ouverte, colorée selon la CI, et une petite flèche circulaire quand l'Auto-fix de Desktop la surveille ;
-- une seconde ligne seulement quand elle sert : la question posée si la session t'attend (« Plan à approuver : … » pour un plan), l'erreur, ce qu'elle attend une fois son tour fini (« Attend une commande : cargo test »), l'avancement de la liste de tâches (`3/7 · Écrire les tests`) pendant le travail, ou le bilan d'une revue de code qui vient de se terminer (« Revue : 13 résultats dont 5 confirmés »).
+> **Unofficial.** This is an independent project, not affiliated with or endorsed by Anthropic. It reads undocumented files of Claude Desktop and Claude Code, so an update of either can break part of the display.
 
-Le reste est dans l'infobulle de la carte : branche, fichiers non commités, résumé du dernier tour, dernier outil, session parente, messages entre sessions.
+Sessions are grouped by project, and the projects that need you come first. Each card takes one or two lines:
 
-Claude Desktop notifie déjà les fins de tour. Le moniteur n'envoie donc que des **rappels** : une session qui t'attend depuis plus de 5 minutes sans réponse. Il ne le fait pas quand la session est visible dans un volet de Desktop au premier plan, ni pour une simple « question probable ». Plusieurs rappels dus en même temps forment une seule notification (« 3 sessions t'attendent toujours »).
+- the session's character, whose pose tells its state and whose held item tells the current tool (see **States**), then the state and how long it has lasted ("waiting · 3 h", "working · 12 s", "unseen · 5 min"), with the PR if one is open, colored by its CI, and a small circular arrow when Desktop's Auto-fix watches it;
+- a second line only when it is useful: the question asked if the session is waiting for you ("Plan to approve: …" for a plan), the error, what it is waiting for once its turn is over ("Waiting for a command: cargo test"), the progress of the task list (`3/7 · Write the tests`) while it works, or the outcome of a code review that just finished ("Review: 13 findings, 5 confirmed").
 
-Il prévient aussi quand le quota du forfait passe un seuil : la fenêtre de 5 heures à 80 % puis à 95 %, la semaine à 90 %, avec le délai avant la réinitialisation (« Quota 5 h à 82 % · Réinitialisation dans 1 h 20 »). Chaque seuil n'est annoncé qu'une fois par fenêtre, et un seuil déjà dépassé au lancement du moniteur ne l'est pas. Ces alertes supposent que Claude Desktop relève le quota, ce qu'il ne fait que quelques heures après un clic droit sur son icône (voir **Quota** plus bas). Une notification prévient donc quand il a cessé : une session travaille, tu es devant l'ordinateur, et aucun relevé depuis 20 minutes (« Quota : relevé arrêté »). Une pause de plus de 10 minutes sans toucher clavier ni souris relance ce décompte, car Desktop saute lui aussi ses relevés quand l'ordinateur est inactif ou verrouillé. Elle n'est envoyée qu'une fois par arrêt, et le réglage « Notifier le quota » la coupe aussi. Avec le mod compagnon (voir **Mod compagnon**), ce sont les sessions qui rapportent le quota : cette notification n'a plus de raison d'être et n'est pas envoyée.
+The rest is in the card's tooltip: branch, uncommitted files, summary of the last turn, last tool, parent session, messages between sessions.
 
-## Prérequis
+Claude Desktop already notifies about finished turns, so the monitor only sends **reminders**: a session that has been waiting for you for more than 5 minutes with no answer. It stays quiet when the session is visible in a Desktop pane in the foreground, and for a mere "probable question". Several reminders due at the same time form a single notification ("3 sessions are still waiting for you").
 
-- Windows 10 ou 11, avec le runtime WebView2 (déjà présent sur Windows 11).
-- Claude Desktop avec l'onglet Code. Testé avec Claude Desktop 4.4212 et Claude Code 2.1.309.
-- `git` dans le PATH pour les branches et les fichiers non commités.
-- `gh` connecté (`gh auth login`) pour l'état des PR. Sans `gh`, le reste fonctionne.
+It also warns when the plan's quota crosses a threshold: the 5-hour window at 80% then 95%, the week at 90%, with the time left before the reset ("5-hour quota at 82%", "Resets in 1 h 20"). Each threshold is announced once per window, and a threshold already passed when the monitor starts is not announced. These alerts rely on Claude Desktop sampling the quota, which it only does for a few hours after a right-click on its icon (see **Quota** below). A notification therefore tells you when it has stopped: a session is working, you are at the computer, and there has been no sample for 20 minutes ("Quota: sampling stopped"). A pause of more than 10 minutes without touching the keyboard or mouse restarts that count, because Desktop also skips its samples while the computer is idle or locked. It is sent once per stop, and the "Notify the quota" setting turns it off too. With the companion mod (see **Companion mod**), sessions report the quota themselves: this notification has no reason to exist and is not sent.
 
-Pour compiler : Rust stable (MSVC), les Build Tools de Visual Studio, Node.js et pnpm.
+The window, the tray menu, the notifications and the installer are in English and French. They follow Windows' display language, and the tray menu lets you choose (see **Usage**).
 
-## Installer
+## Requirements
 
-Lancer `Claude Session Monitor_0.1.0_x64-setup.exe`. L'installeur ne demande pas de droits d'administrateur : tout va dans le compte Windows courant, l'application dans `%LOCALAPPDATA%\Claude Session Monitor`. Il ajoute un raccourci au menu Démarrer et une entrée dans « Applications installées », d'où on la désinstalle.
+- Windows 10 or 11, with the WebView2 runtime (already there on Windows 11).
+- Claude Desktop with the Code tab. Tested with Claude Desktop 4.4212 and Claude Code 2.1.309.
+- `git` on the PATH for branches and uncommitted files.
+- `gh` logged in (`gh auth login`) for PR status. Without `gh`, everything else works.
 
-Il ajoute aussi à Claude Desktop ce qu'il faut pour le quota exact et les sous-agents : le mod compagnon, chargé par chaque session démarrée après l'installation (voir **Mod compagnon**). Il n'y a rien à redémarrer. Si Claude Desktop n'a encore jamais ouvert son onglet Code, le mod ne peut pas être ajouté : l'installeur le dit et finit quand même. L'ouvrir une fois, puis relancer l'installeur, suffit à le rattraper.
+To build: stable Rust (MSVC), the Visual Studio Build Tools, Node.js and pnpm.
 
-L'installeur n'est pas signé : Windows SmartScreen peut afficher « Windows a protégé votre ordinateur » au premier lancement. « Informations complémentaires », puis « Exécuter quand même ».
+## Install
 
-Pour mettre à jour, lancer l'installeur de la nouvelle version. Il passe d'abord par la désinstallation de l'ancienne : y laisser décochée « Supprimer les données de l'application ». Les réglages, les sessions déjà vues et « Lancer au démarrage de Windows » sont alors conservés.
+Download `Claude-Session-Monitor_<version>_x64-setup.exe` from the [Releases](https://github.com/alexiscrocilla/claude-session-monitor/releases) page and run it. Each release also gives the installer's SHA-256 in `SHA256SUMS.txt`.
 
-## Compiler et lancer
+The installer asks for no administrator rights: everything goes in the current Windows account, the app in `%LOCALAPPDATA%\Claude Session Monitor`. It adds a Start menu shortcut and an entry in "Installed apps", from which you can uninstall it.
+
+It also adds to Claude Desktop what the exact quota and the sub-agents need: the companion mod, loaded by every session started after the installation (see **Companion mod**). Nothing needs restarting. If Claude Desktop has never opened its Code tab, the mod cannot be added: the installer says so and finishes anyway. Opening the tab once, then running the installer again, makes up for it.
+
+The installer is not signed: Windows SmartScreen may show "Windows protected your PC" the first time. Choose "More info", then "Run anyway".
+
+To update, run the installer of the new version. It first goes through the uninstaller of the old one: leave "Delete the application data" unticked there. Settings, sessions already seen and "Start with Windows" are then kept.
+
+## Build and run
+
+```bash
+git clone https://github.com/alexiscrocilla/claude-session-monitor.git
+```
 
 ```bash
 pnpm install
@@ -42,151 +56,155 @@ pnpm install
 pnpm tauri build
 ```
 
-L'installeur est alors dans `src-tauri\target\release\bundle\nsis\`, et l'exécutable dans `src-tauri\target\release\claude-session-monitor.exe`. Celui-ci se lance tel quel, sans installation, mais sans le mod. `pnpm tauri build --no-bundle` ne produit que l'exécutable.
+The installer is then in `src-tauri\target\release\bundle\nsis\`, and the executable is `src-tauri\target\release\claude-session-monitor.exe`. The executable runs as is, with no installation, but without the mod. `pnpm tauri build --no-bundle` produces only the executable.
 
-En développement, avec rechargement de l'interface :
+For development, with live reload of the interface:
 
 ```bash
 pnpm tauri dev
 ```
 
-## Utilisation
+## Usage
 
-- **En-tête** : le résumé (« 1 t'attend · 4 au travail · 2 non vues »), puis trois boutons : mode compact, épingler au premier plan, masquer. Faire glisser l'en-tête déplace la fenêtre.
-- **Quota** : sous l'en-tête, une jauge par fenêtre du forfait, 5 heures et 7 jours. La barre fine montre la part utilisée (grise, ambre dès 75 %, rouge dès 90 %), la zone teintée de la même couleur derrière elle la part du temps écoulé dans la fenêtre : une barre qui dépasse sa zone consomme plus vite qu'un rythme régulier. Suivent le pourcentage et l'heure (ou le jour) de réinitialisation, exacte avec le mod compagnon, estimée sans lui. L'infobulle donne le détail et l'heure du relevé. Sans le mod, si Desktop n'a rien relevé depuis plus de 20 minutes, une ligne sous les jauges le dit et indique comment relancer le relevé (« Pas de relevé depuis 08:17 : clic droit sur l'icône de Claude Desktop pour le relancer ») ; une fenêtre réinitialisée depuis affiche « — ».
-- **Mode compact** : la fenêtre se réduit à une ligne de 44 px qui montre la session qui t'attend, sinon le résumé, avec le personnage de la session la plus urgente. Dès qu'une fenêtre du quota atteint 80 %, une pastille l'indique à droite (« 5 h 82 % »).
-- **Sessions imbriquées** : comme dans la barre latérale de Desktop, une session lancée depuis une autre (session parallèle, copie, ou carte « New task » lancée) s'affiche sous elle, en retrait, reliée par un trait. Tout est au même niveau sous la première session affichée de la lignée, même une petite-fille, et la famille va dans le groupe du projet de cette session, à la place de son membre le plus urgent : un enfant qui t'attend fait remonter son parent. Si aucune session de la lignée n'est affichée, la session reste seule, avec « Lancée depuis … » dans l'infobulle. Le chevron après le titre replie la famille : les sessions qui t'attendent ou sont en erreur restent visibles, une ligne résume les autres (« 2 sessions imbriquées · 1 en cours ») et un clic dessus déplie. Le repli est mémorisé dans la fenêtre.
-- **Tâches proposées** : les cartes « New task » qu'une session a proposées et que tu n'as encore ni lancées ni écartées apparaissent sous cette session quand elle est affichée, sinon dans le groupe de leur projet après ses sessions, en pointillés (« proposée · 2 h »), avec leur argumentaire en seconde ligne. Une seule à la fois demande ton attention, par famille de sessions ou par projet : la plus récente. Les autres attendent derrière une ligne (« 2 tâches proposées ») qu'un clic déplie. Une tâche y passe aussi quand tu as écrit deux fois à sa session depuis qu'elle a été proposée sans la lancer : elle ne compte alors plus dans les tâches annoncées. Un clic sur la carte ouvre la session qui l'a proposée : c'est là, dans Desktop, qu'on lance ou écarte la carte, aucun lien ne permet de le faire de l'extérieur. La croix (« Pas pour moi ») masque la tâche dans le moniteur seulement, Desktop la garde. Ce choix est mémorisé dans la fenêtre. Une carte n'est montrée que pendant 7 jours après sa proposition : c'est la durée de vie que Desktop donne à ses propositions, et le moniteur l'applique aussi aux anciennes cartes, que Desktop garde sans limite (l'infobulle dit laquelle des deux règles s'applique).
-- **Clic sur une carte** : ouvre cette session dans Claude Desktop (lien `claude://code/continue?session=local_…`, le même que celui de la liste de raccourcis de Desktop) et la marque comme vue.
-- **Clic sur la pastille de PR** : ouvre la PR dans le navigateur. Quand l'Auto-fix de Desktop surveille la PR (flèche circulaire), Desktop relance lui-même la session si la CI échoue, en cas de conflit ou de commentaire de revue. Tant que la session travaille sur une CI rouge ou un conflit, l'infobulle dit « Auto-fix s'en charge ». Desktop ne la relance qu'une fois par échec : si elle t'attend, s'arrête sur une erreur ou finit sans avoir réglé le problème, c'est à toi de voir. L'état vient de la carte de PR que Desktop garde pour la session, avec la même règle que lui (PR ouverte, sur GitHub, ni écartée ni héritée d'une session copiée), et n'est montré que si Desktop tourne.
-- **Icône de la zone de notification** : sa couleur suit la session la plus urgente, et son infobulle donne le résumé, puis le quota sur une seconde ligne. Un clic affiche ou masque la fenêtre. Le menu permet de changer les réglages, de lancer le moniteur au démarrage de Windows et de quitter. Masquer la fenêtre ne ferme pas l'application.
+- **Header**: the summary ("1 waiting · 4 working · 2 unseen"), then three buttons: compact mode, pin on top, hide. Dragging the header moves the window.
+- **Quota**: under the header, one gauge per window of the plan, 5 hours and 7 days. The thin bar shows the share used (grey, amber from 75%, red from 90%), the zone tinted the same color behind it shows the share of the window's time elapsed: a bar that goes past its zone is using the plan faster than a steady pace. Next come the percentage and the reset time (or day), exact with the companion mod, estimated without it. The tooltip gives the details and the time of the sample. Without the mod, if Desktop has sampled nothing for more than 20 minutes, a line under the gauges says so and tells how to restart it ("No sample since 08:17: right-click Claude Desktop's icon to restart it"); a window that has reset since then shows "—".
+- **Compact mode**: the window shrinks to a 44 px line that shows the session waiting for you, or else the summary, with the character of the most urgent session. As soon as a quota window reaches 80%, a badge shows it on the right ("5 h 82%").
+- **Nested sessions**: as in Desktop's sidebar, a session started from another one (side session, copy, or a "New task" card that was started) shows under it, indented and joined by a line. Everything sits at one level under the first listed session of the lineage, even a grandchild, and the family goes to that session's project group, at the place of its most urgent member: a child waiting for you brings its parent up. If no session of the lineage is listed, the session stays alone, with "Started from …" in the tooltip. The chevron after the title folds the family: sessions waiting for you or in error stay visible, one row sums up the others ("2 nested sessions · 1 working") and a click unfolds it. The fold is remembered in the window.
+- **Proposed tasks**: the "New task" cards a session proposed, which you have neither started nor dismissed, appear under that session when it is listed, otherwise in their project's group after its sessions, dashed ("proposed · 2 h"), with their pitch on the second line. Only one at a time asks for your attention, per family of sessions or per project: the newest. The others wait behind a row ("2 proposed tasks") that a click unfolds. A task also goes there once you have written twice to its session since it was proposed without starting it: it then no longer counts among the announced tasks. A click on the card opens the session that proposed it: that is where, in Desktop, you start or dismiss the card, as no link can do it from outside. The cross ("Not for me") hides the task in the monitor only, and Desktop keeps it. That choice is remembered in the window. A card is shown for 7 days after it was proposed: that is the lifetime Desktop gives its proposals, and the monitor applies it to old cards too, which Desktop keeps forever (the tooltip says which of the two rules applies).
+- **Click on a card**: opens that session in Claude Desktop (link `claude://code/continue?session=local_…`, the same as in Desktop's jump list) and marks it as seen.
+- **Click on the PR badge**: opens the PR in the browser. When Desktop's Auto-fix watches the PR (circular arrow), Desktop restarts the session itself if CI fails, on a conflict or on a review comment. While the session works on a red CI or a conflict, the tooltip says "Auto-fix is on it". Desktop only restarts it once per failure: if it waits for you, stops on an error or ends without solving the problem, it is up to you. The state comes from the PR card Desktop keeps for the session, with the same rule as Desktop (PR open, on GitHub, neither dismissed nor inherited from a copied session), and is shown only while Desktop runs.
+- **Notification area icon**: its color follows the most urgent session, and its tooltip gives the summary, then the quota on a second line. A click shows or hides the window. The menu changes the settings, starts the monitor with Windows, picks the language and quits. Hiding the window does not close the app.
+- **Language**: by default the app follows Windows' display language: French if it is French, English otherwise. The **Language** item of the tray menu forces English or French, at once and with no restart. Text that comes from sessions stays in the language it was written in, and button labels already read from a session change at its next message.
 
-### États
+### States
 
-| Personnage | État | Signification |
+| Character | State | Meaning |
 |---|---|---|
-| Pince levée, « ? » ambre | Attend | La session est bloquée sur toi : permission, question, boîte de dialogue, ou tour terminé sur une question (« Décision attendue »). Le « ? » est pâle quand la question est seulement devinée. |
-| Contrarié, « ! » rouge | Erreur | Le dernier tour s'est arrêté sur une erreur (celle que Desktop affiche, ou une erreur d'API). |
-| Drapeau bleu | Non vue | Le tour est fini et tu n'as pas regardé la session depuis. |
-| Sur ses pattes, un outil en main | Au travail | Claude travaille, ou a fini son tour et attend une tâche de fond qui le relancera. |
-| Gris, les yeux fermés | Inactive | Rien en cours, déjà vue. |
+| Claw raised, amber "?" | Waiting | The session is blocked on you: permission, question, dialog, or a turn that ended on a question ("Decision needed"). The "?" is pale when the question is only guessed. |
+| Upset, red "!" | Error | The last turn stopped on an error (the one Desktop shows, or an API error). |
+| Blue flag | Unseen | The turn is over and you have not looked at the session since. |
+| On its feet, a tool in hand | Working | Claude is working, or has finished its turn and waits for background work that will start it again. |
+| Grey, eyes closed | Idle | Nothing running, already seen. |
 
-Au travail, le personnage tient ce que fait la session : un stylo pour une modification, une clé pour une commande, une loupe pour une lecture ou une recherche, un globe pour le web, et un petit crabe l'accompagne quand elle lance un sous-agent. Il fait un pas à chaque appel d'outil et ne bouge pas entre deux : il n'y a aucune animation en continu, qui ferait travailler WebView2 toute la journée. Le pas est supprimé si Windows demande de réduire les animations.
+While working, the character holds what the session is doing: a pen for an edit, a wrench for a command, a magnifying glass for a read or a search, a globe for the web, and a small crab joins it when it starts a sub-agent. It takes one step per tool call and does not move between two: there is no continuous animation, which would keep WebView2 busy all day. The step is dropped if Windows asks to reduce animations.
 
-Avec le mod compagnon, un mini-crabe s'ajoute après le titre pour chaque sous-agent en cours : trois au plus, les autres comptés à côté. L'infobulle dit à quoi ils travaillent.
+With the companion mod, a mini crab appears after the title for each running sub-agent: three at most, the others counted beside them. The tooltip says what they are working on.
 
-Comment ces états sont décidés :
+How these states are decided:
 
-- **Attend** vient d'abord des tâches demandées : quand tu demandes une tâche à part, Desktop bloque la session jusqu'à ce que tu choisisses « Nouvelle session » ou « Ici ». Le registre la montre alors au travail ; le moniteur l'affiche « Attend » avec « Nouvelle session pour « … », ou ici ? ». Puis vient le registre de Claude Code (permissions, outil de question). Quand la permission demandée est l'approbation d'un plan (`ExitPlanMode`), la carte dit « Plan à approuver » avec le titre du plan. Une session qui finit son tour sur une question est aussi « Attend » : question posée avec des boutons (`ask` de `wrap_up`) ou session classée « bloquée » par Desktop, affichée « Décision attendue ». Un dernier message qui se termine par « ? » donne « Question dans le dernier message », un signal moins sûr. Seul ton prochain message efface ces attentes : les regarder ne suffit pas.
-- **Au travail** vient du registre pendant un tour. Celui-ci repasse à `idle` dès la fin du tour, même si du travail continue en arrière-plan. Le moniteur suit donc ce travail dans le transcript, jusqu'à la notification de fin : commandes de fond (y compris celles déplacées en fond à leur délai), sous-agents, workflows, moniteurs et réveils planifiés (`ScheduleWakeup`). La carte dit ce que la session attend, et l'état « Non vue » n'arrive qu'à la fin de ce travail. Les questions et les erreurs restent prioritaires. Ce travail meurt avec le processus : celui d'un processus remplacé ne compte plus, et une session en pause n'attend rien. Une session attend aussi les sessions parallèles qu'elle a lancées tant qu'elles travaillent, car Desktop la relance ensuite (« Attend 2 sessions ») ; pas une session détachée, ni une session lancée depuis une carte « New task ».
-- **Erreur** suit les champs d'erreur de Desktop sur 7 jours. Un simple redémarrage de Desktop ne compte pas. Elle s'efface à ton prochain message.
-- **Non vue** se remet à zéro quand tu cliques la carte, ou quand la session est visible dans un volet de Claude Desktop (vue partagée comprise) resté au premier plan au moins une seconde. Les sessions déjà vues sont mémorisées dans `acks.json` et survivent à un redémarrage de l'application. Un tour lancé par une autre session ne rend pas une session « non vue », sauf s'il a produit un résultat.
-- La liste de tâches reprend exactement les statuts affichés par Desktop.
-- **Revue de code** : quand une session rend le résultat d'une revue (outil `ReportFindings`), le moniteur compte les résultats, ceux confirmés et ceux pas encore traités. Le bilan s'affiche tant qu'il en reste à traiter et que tu n'as pas écrit à la session depuis ; en seconde ligne d'une session non vue, dans l'infobulle sinon.
-- **Quota** : Claude Desktop relève l'usage du forfait auprès de claude.ai et garde 30 jours d'historique. Depuis sa version 3.6556, il ne le fait qu'à son ouverture, puis toutes les 5 à 15 minutes pendant les 5 heures qui suivent un clic droit sur son icône dans la zone de notification (durée réglée à distance par Desktop). Sans ce clic droit, la jauge de 5 h passe à « — » au plus tard 5 heures après le dernier relevé, et celle de 7 jours garde l'ancienne valeur. L'historique ne contient que des pourcentages, sans heure de réinitialisation : le moniteur la déduit des baisses. La fenêtre de 5 h commence au premier usage après la fin de la précédente ; son heure n'est donnée que si l'historique la situe à 30 minutes près. La fenêtre de 7 jours se réinitialise à heure fixe chaque semaine : les baisses des semaines précédentes, décalées d'une semaine, se recoupent et précisent ce créneau (une réinitialisation exceptionnelle hors calendrier est ignorée) ; il n'est donné qu'à 6 heures près. Avec le mod compagnon, l'heure de réinitialisation est celle que l'API annonce, et le pourcentage vient du relevé le plus récent des deux sources.
-- **Sessions en pause** : Claude Desktop ne garde qu'un nombre limité de processus en vie (6 au minimum, davantage selon la mémoire) et arrête les sessions inactives au-delà, ou quand la mémoire manque. Une session sans processus reste listée tant qu'elle attend, est en erreur ou non vue, si son dernier tour ou sa dernière activité date de moins de 7 jours. Son état est déduit du fichier de Desktop et du transcript, comme pour les autres. Son infobulle indique « En pause », et un clic l'ouvre dans Desktop comme d'habitude. Une session en pause et inactive n'est pas listée.
+- **Waiting** comes first from requested tasks: when you ask for a separate task, Desktop blocks the session until you choose "New session" or "Here". The registry then shows it as working; the monitor shows it as "Waiting" with `New session for "…", or here?`. Then comes Claude Code's registry (permissions, question tool). When the permission requested is the approval of a plan (`ExitPlanMode`), the card says "Plan to approve" with the plan's title. A session that ends its turn on a question is also "Waiting": a question asked with buttons (`ask` of `wrap_up`) or a session Desktop classed as "blocked", shown as "Decision needed". A last message ending with "?" gives "Question in the last message", a less certain signal. Only your next message clears these waits: looking at them is not enough.
+- **Working** comes from the registry during a turn. It goes back to `idle` as soon as the turn ends, even if work continues in the background. The monitor therefore follows that work in the transcript, up to its end notification: background commands (including those moved to the background at their timeout), sub-agents, workflows, monitors and scheduled wake-ups (`ScheduleWakeup`). The card says what the session is waiting for, and "Unseen" only comes when that work is over. Questions and errors keep priority. That work dies with its process: work of a replaced process no longer counts, and a paused session waits for nothing. A session also waits for the side sessions it started while they work, because Desktop then starts it again ("Waiting for 2 sessions"); but not for a detached session, nor for a session started from a "New task" card.
+- **Error** follows Desktop's error fields over 7 days. A mere restart of Desktop does not count. It clears at your next message.
+- **Unseen** resets when you click the card, or when the session is visible in a Claude Desktop pane (split view included) that stays in the foreground for at least a second. Sessions already seen are remembered in `acks.json` and survive a restart of the app. A turn started by another session does not make a session "unseen", unless it produced a result.
+- The task list repeats exactly the statuses Desktop shows.
+- **Code review**: when a session returns the result of a review (`ReportFindings` tool), the monitor counts the findings, those confirmed and those not dealt with yet. The outcome shows as long as some remain and you have not written to the session since: on the second line of an unseen session, in the tooltip otherwise.
+- **Quota**: Claude Desktop samples the plan's usage from claude.ai and keeps 30 days of history. Since version 3.6556, it only does so when it opens, then every 5 to 15 minutes for the 5 hours after a right-click on its icon in the notification area (a duration Desktop sets remotely). Without that right-click, the 5-hour gauge turns to "—" at the latest 5 hours after the last sample, and the 7-day one keeps the old value. The history holds percentages only, with no reset time: the monitor infers it from the drops. The 5-hour window starts at the first use after the end of the previous one; its time is only given if the history places it within 30 minutes. The 7-day window resets at a fixed time each week: the drops of previous weeks, shifted by a week, overlap and narrow down that slot (an exceptional reset off schedule is ignored); it is only given within 6 hours. With the companion mod, the reset time is the one the API announces, and the percentage comes from the most recent sample of the two sources.
+- **Paused sessions**: Claude Desktop only keeps a limited number of processes alive (6 at least, more depending on memory) and stops idle sessions beyond that, or when memory runs short. A session with no process stays listed as long as it is waiting, in error or unseen, if its last turn or last activity is less than 7 days old. Its state is worked out from Desktop's file and the transcript, as for the others. Its tooltip says "Paused", and a click opens it in Desktop as usual. A paused, idle session is not listed.
 
-## D'où viennent les données
+## Where the data comes from
 
-Tout est lu sur la machine, en lecture seule. Le seul accès réseau passe par `gh`, pour l'état des PR.
+Everything is read on the machine, read-only. There is no telemetry, and the app makes no network call of its own: the only network access goes through `gh`, for PR status.
 
-| Source | Ce qu'on en tire | Format documenté ? |
+| Source | What it gives | Documented format? |
 |---|---|---|
-| `~\.claude\sessions\<pid>.json` | Sessions vivantes, état, raison de l'attente (une session Desktop sans fichier ici est en pause) | Non (même contenu que `claude agents --json`, qui est officiel) |
-| `%APPDATA%\Claude\claude-code-sessions\…\local_<id>.json` | Titre, archivage, dernier passage, résumé du tour, PR liée par Desktop et son Auto-fix, messages entre sessions, session parente, cartes « New task » en attente | Non |
-| `~\.claude\projects\…\<id>.jsonl` | Outil en cours, tâches de fond, liste de tâches, question de fin de tour, erreurs d'API, branche, dernier message, plan à approuver, résultats de revue, tes messages depuis une tâche proposée | Non |
-| `%APPDATA%\Claude\claude_desktop_config.json` | Sessions affichées dans les volets de Desktop | Non |
-| `%APPDATA%\Claude\plan-usage-history.json` | Quota du forfait (fenêtres de 5 h et de 7 jours), tel que Desktop l'a relevé | Non |
-| `~\.claude\session-monitor\` | Quota exact et sous-agents, écrits par le mod compagnon | Oui (`crates/monitor-core/src/companion.rs`) |
-| `git` dans le dossier de la session | Branche, fichiers non commités | Oui |
-| `gh pr view` / `gh pr list --head` | État de la PR, CI, relecture | Oui |
+| `~\.claude\sessions\<pid>.json` | Live sessions, state, reason for the wait (a Desktop session with no file here is paused) | No (same content as `claude agents --json`, which is official) |
+| `%APPDATA%\Claude\claude-code-sessions\…\local_<id>.json` | Title, archiving, last visit, turn summary, PR linked by Desktop and its Auto-fix, messages between sessions, parent session, pending "New task" cards | No |
+| `~\.claude\projects\…\<id>.jsonl` | Current tool, background tasks, task list, end-of-turn question, API errors, branch, last message, plan to approve, review results, your messages since a proposed task | No |
+| `%APPDATA%\Claude\claude_desktop_config.json` | Sessions shown in Desktop's panes | No |
+| `%APPDATA%\Claude\plan-usage-history.json` | The plan's quota (5-hour and 7-day windows), as Desktop sampled it | No |
+| `~\.claude\session-monitor\` | Exact quota and sub-agents, written by the companion mod | Yes (`crates/monitor-core/src/companion.rs`) |
+| `git` in the session's folder | Branch, uncommitted files | Yes |
+| `gh pr view` / `gh pr list --head` | PR state, CI, review | Yes |
 
-Ces formats internes changent avec les versions de Claude Code et de Desktop. Les lecteurs tolèrent les champs manquants et les fichiers en cours d'écriture, mais une mise à jour peut casser une partie de l'affichage. Pour vérifier ce que l'application voit, sans fenêtre :
+These internal formats change with the versions of Claude Code and Desktop. The readers tolerate missing fields and files being written, but an update can break part of the display. To check what the app sees, with no window:
 
 ```bash
 cargo run --manifest-path crates/monitor-core/Cargo.toml --bin dump -- --summary
 ```
 
-`--watch` affiche chaque changement en continu ; sans option, la commande affiche l'instantané complet en JSON.
+`--watch` prints each change continuously; with no option, the command prints the full snapshot as JSON. This output holds your session titles and folder paths: read it before you share it.
 
-## Réglages
+## Settings
 
-Ils sont modifiables depuis le menu de l'icône et enregistrés dans `%APPDATA%\local.claude-session-monitor\settings.json` :
+They can be changed from the icon's menu and are saved in `%APPDATA%\local.claude-session-monitor\settings.json`:
 
-| Clé | Défaut | Effet |
+| Key | Default | Effect |
 |---|---|---|
-| `notifyOnWaiting` | `true` | Rappel quand une session t'attend depuis 5 minutes |
-| `notifyOnFinished` | `false` | Notification immédiate quand une session termine son tour (Desktop le fait déjà) |
-| `notifyOnError` | `true` | Rappel quand une erreur reste sans réponse 5 minutes |
-| `notifyOnQuota` | `true` | Notification quand le quota passe 80 % puis 95 % (5 heures) ou 90 % (semaine) |
-| `includeCliSessions` | `false` | Affiche aussi les sessions lancées hors de Claude Desktop |
-| `prPollSecs` | `60` | Intervalle de rafraîchissement des PR |
-| `messageWindowHours` | `6` | Au-delà, un message sans réponse n'est plus signalé |
-| `compact` | `false` | Mode compact |
-| `alwaysOnTop` | `true` | Fenêtre toujours au premier plan |
+| `notifyOnWaiting` | `true` | Reminder when a session has been waiting for you for 5 minutes |
+| `notifyOnFinished` | `false` | Immediate notification when a session ends its turn (Desktop already does it) |
+| `notifyOnError` | `true` | Reminder when an error stays unanswered for 5 minutes |
+| `notifyOnQuota` | `true` | Notification when the quota crosses 80% then 95% (5 hours) or 90% (week) |
+| `includeCliSessions` | `false` | Also shows sessions started outside Claude Desktop |
+| `prPollSecs` | `60` | How often PRs are refreshed |
+| `messageWindowHours` | `6` | Past this, a message without a reply is no longer reported |
+| `compact` | `false` | Compact mode |
+| `alwaysOnTop` | `true` | Window always on top |
+| `language` | `"auto"` | `"en"`, `"fr"`, or `"auto"` to follow Windows |
 
-## Ce que l'application écrit sur la machine
+## What the app writes on the machine
 
-- `%APPDATA%\local.claude-session-monitor\` : `settings.json`, `acks.json` (sessions déjà vues) et la position de la fenêtre.
-- `HKCU\Software\Classes\AppUserModelId\local.claude-session-monitor` et `%LOCALAPPDATA%\local.claude-session-monitor\toast-icon.png` : le nom et l'icône des notifications. Supprimer les deux suffit à annuler.
-- Seulement si « Lancer au démarrage de Windows » est coché : la valeur `local.claude-session-monitor` de `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, qui contient le chemin de l'exécutable. C'est elle que liste « Applications au démarrage » dans les paramètres de Windows. Désactiver l'application là (ou dans le Gestionnaire des tâches) décoche aussi la case du menu ; la recocher efface ce réglage de Windows (la valeur du même nom sous `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run`). Décocher la case supprime les deux ; si l'exécutable a été déplacé, la valeur est remise sur son nouveau chemin au lancement suivant. La version de développement (`pnpm tauri dev`) ne propose pas cette case : elle dépend du serveur de développement.
+- `%APPDATA%\local.claude-session-monitor\`: `settings.json`, `acks.json` (sessions already seen) and the window's position.
+- `HKCU\Software\Classes\AppUserModelId\local.claude-session-monitor` and `%LOCALAPPDATA%\local.claude-session-monitor\toast-icon.png`: the name and icon of the notifications. Deleting both is enough to undo them.
+- Only if "Start with Windows" is ticked: the `local.claude-session-monitor` value of `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, which holds the path of the executable. That is what "Startup apps" lists in Windows' settings. Turning the app off there (or in Task Manager) also unticks the menu item; ticking it again clears that Windows setting (the value of the same name under `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run`). Unticking the item removes both; if the executable has moved, the value is put back on its new path at the next launch. The development build (`pnpm tauri dev`) does not offer this item: it depends on the development server.
 
-Elle ne modifie rien dans `~\.claude` ni dans les dossiers de Claude Desktop. Seul le mod compagnon, s'il est installé, écrit dans `~\.claude\session-monitor\`.
+It changes nothing in `~\.claude` or in Claude Desktop's folders. Only the companion mod, if installed, writes in `~\.claude\session-monitor\`.
 
-L'installeur écrit en plus :
+The installer also writes:
 
-- `%LOCALAPPDATA%\Claude Session Monitor\` : l'application, et dans `companion\` la marketplace locale du mod ;
-- `~\.claude\settings.json` et `~\.claude\plugins\`, par le `claude.exe` de Desktop : la marketplace `claude-session-monitor` et le mod activé pour toutes les sessions ;
-- les raccourcis, l'entrée de désinstallation (`HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Claude Session Monitor`) et `HKCU\Software\Alexis Crocilla\Claude Session Monitor`, qui garde le dossier d'installation.
+- `%LOCALAPPDATA%\Claude Session Monitor\`: the app, and in `companion\` the mod's local marketplace;
+- `~\.claude\settings.json` and `~\.claude\plugins\`, through Desktop's `claude.exe`: the `claude-session-monitor` marketplace and the mod, enabled for all sessions;
+- the shortcuts, the uninstall entry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Claude Session Monitor`) and `HKCU\Software\Alexis Crocilla\Claude Session Monitor`, which keeps the install folder.
 
-La désinstallation retire tout cela, ainsi que le mod, sa marketplace, le lancement au démarrage et l'identité des notifications. Seule reste la clé `HKCU\Software\Alexis Crocilla\Claude Session Monitor`, où elle note que le lancement au démarrage était coché, pour le remettre à la réinstallation. Si Claude Desktop a déjà été désinstallé, le mod reste aussi dans `~\.claude`, faute de `claude.exe` pour le retirer. Cocher « Supprimer les données de l'application » efface en plus cette clé, `%APPDATA%\local.claude-session-monitor\`, `%LOCALAPPDATA%\local.claude-session-monitor\` et `~\.claude\session-monitor\`.
+Uninstalling removes all of that, as well as the mod, its marketplace, the start with Windows and the notification identity. Only the `HKCU\Software\Alexis Crocilla\Claude Session Monitor` key stays, where it notes that start with Windows was ticked, to restore it on reinstalling. If Claude Desktop has already been uninstalled, the mod also stays in `~\.claude`, for lack of a `claude.exe` to remove it. Ticking "Delete the application data" also erases that key, `%APPDATA%\local.claude-session-monitor\`, `%LOCALAPPDATA%\local.claude-session-monitor\` and `~\.claude\session-monitor\`.
 
-## Mod compagnon
+## Companion mod
 
-`mod/monitor-compagnon` est un mod Claude Code, ajouté par l'installeur. Sans lui, tout fonctionne comme décrit plus haut, avec Desktop pour seule source du quota. Avec lui, chaque session écrit ce que le moteur de Claude Code sait déjà, sans appel réseau de plus et sans lire aucun identifiant :
+`mod/monitor-compagnon` is a Claude Code mod, added by the installer. Without it, everything works as described above, with Desktop as the only source of the quota. With it, each session writes what Claude Code's engine already knows, with no extra network call and without reading any credential:
 
-- `quota.json` : le pourcentage et l'heure exacte de réinitialisation des fenêtres de 5 h et de 7 jours, après chaque tour et à chaque point gagné. Plus besoin de clic droit sur l'icône de Desktop ;
-- `sessions/<id>.json` : les sous-agents en cours de la session.
+- `quota.json`: the percentage and exact reset time of the 5-hour and 7-day windows, after each turn and at each point gained. No more right-click on Desktop's icon;
+- `sessions/<id>.json`: the session's running sub-agents.
 
-L'installeur appelle `claude-session-monitor.exe --install-companion`, qui fait le travail avec le `claude.exe` le plus récent de `%APPDATA%\Claude\claude-code` : la marketplace `claude-session-monitor` pointe sur le dossier `companion\` de l'application, d'où Claude Code lit le mod. Une installation du même mod venue d'une autre marketplace est retirée une fois celle-ci en place, pour ne pas écrire deux fois les mêmes fichiers.
+The installer calls `claude-session-monitor.exe --install-companion`, which does the work with the most recent `claude.exe` in `%APPDATA%\Claude\claude-code`: the `claude-session-monitor` marketplace points at the app's `companion\` folder, from which Claude Code reads the mod. An install of the same mod from another marketplace is removed once this one is in place, so the same files are not written twice.
 
-Le mod ne se charge que dans les sessions démarrées après son installation, et il lui faut un Claude Code récent : la version 2.1.251 ne connaît pas l'événement `session.measure`, la 2.1.309 si. Toute session peut écrire le quota, y compris celles que le moniteur n'affiche pas, puisque c'est le même pour tout le compte. Le format porte un numéro de version : un fichier d'une autre version est ignoré, et le moniteur retombe sur Desktop.
+The mod only loads in sessions started after it was installed, and it needs a recent Claude Code: version 2.1.251 does not know the `session.measure` event, 2.1.309 does. Any session can write the quota, including those the monitor does not show, since it is the same for the whole account. The format carries a version number: a file of another version is ignored, and the monitor falls back on Desktop.
 
-## Limites connues
+## Known limits
 
-- Desktop n'enregistre pas l'onglet affiché. Quand il est au premier plan sur l'onglet Chat, une session visible dans un volet Code compte comme visible, et aucun rappel n'est envoyé pour elle tant que c'est le cas.
-- Une attente qui change de nature sans passer par un autre état (une « question probable » confirmée ensuite par Desktop, par exemple) ne relance pas de rappel.
-- Les questions détectées par Desktop ou par le « ? » final disparaissent quand une autre session ou une tâche relance celle-ci. Les questions à boutons, elles, restent jusqu'à ton message.
-- Une commande de fond compte 2 heures au plus (les autres tâches, 24 heures). Un serveur de développement lancé en fond garde donc sa session verte 2 heures, et une très longue commande passe en inactive ou non vue avant sa fin. Sur 520 commandes mesurées, 3 ont dépassé 2 heures.
-- Les tâches planifiées avec `CronCreate` ne comptent pas comme une attente : le moniteur ne les suit pas. Une commande lancée dans le panneau Terminal de Desktop non plus : sa fin ne relance pas la session.
-- Les sessions cloud lancées depuis Desktop n'ont pas de trace locale et n'apparaissent pas.
-- Une session en pause dont le dernier tour date de plus de 7 jours n'apparaît plus, même si sa question est restée sans réponse.
-- Avec le mod compagnon, le quota ne bouge que quand une session reçoit une réponse : l'usage fait ailleurs (Chat, Cowork) n'apparaît qu'à la réponse suivante, sauf si Desktop relève entre-temps. Le mod ne sait pas supprimer de fichier : un petit fichier reste dans `sessions/` par session ayant lancé un sous-agent.
-- Sans le mod, le quota n'est relevé que quand Claude Desktop est ouvert, au plus toutes les 5 minutes : la jauge peut retarder de quelques minutes sur l'usage réel. Ses heures de réinitialisation sont des estimations tirées de l'historique ; elles manquent tant que l'historique ne montre pas de réinitialisation assez nette.
-- Les builds de développement utilisent l'identifiant `local.claude-session-monitor.dev` et peuvent tourner à côté de la version release.
+- Desktop does not record the tab on display. When it is in the foreground on the Chat tab, a session visible in a Code pane counts as visible, and no reminder is sent for it while that lasts.
+- A wait that changes nature without going through another state (a "probable question" later confirmed by Desktop, for instance) does not trigger a new reminder.
+- Questions detected by Desktop or by the final "?" disappear when another session or a task starts the session again. Questions with buttons stay until your message.
+- A background command counts for 2 hours at most (other tasks, 24 hours). A development server run in the background therefore keeps its session green for 2 hours, and a very long command turns idle or unseen before it ends. Of 520 commands measured, 3 went over 2 hours.
+- Tasks scheduled with `CronCreate` do not count as a wait: the monitor does not follow them. Neither does a command run in Desktop's Terminal panel: its end does not start the session again.
+- Cloud sessions started from Desktop leave no local trace and do not appear.
+- A paused session whose last turn is more than 7 days old no longer appears, even if its question is still unanswered.
+- With the companion mod, the quota only moves when a session gets an answer: usage elsewhere (Chat, Cowork) only appears at the next answer, unless Desktop samples in the meantime. The mod cannot delete files: a small file stays in `sessions/` for each session that started a sub-agent.
+- Without the mod, the quota is only sampled while Claude Desktop is open, at most every 5 minutes: the gauge can lag a few minutes behind real usage. Its reset times are estimates from the history; they are missing while the history shows no clear enough reset.
+- Development builds use the identifier `local.claude-session-monitor.dev` and can run alongside the release version.
 
 ## Structure
 
 ```
-crates/monitor-core/   Logique, sans dépendance à Tauri
-  src/registry.rs      Registre des processus et vérification qu'ils vivent
-  src/desktop.rs       Fichiers de session de Claude Desktop
-  src/transcript.rs    Lecture incrémentale des transcripts
-  src/git_pr.rs        git et gh, sur un fil d'exécution à part
-  src/aggregate.rs     Fusion des sources, règles d'état, tri
-  src/usage.rs         Historique du quota et estimation des réinitialisations
-  src/companion.rs     Fichiers du mod compagnon, fusion du quota
-  src/engine.rs        Surveillance des dossiers et reconstruction de l'instantané
-  src/bin/dump.rs      Outil de diagnostic en ligne de commande
-src-tauri/             Fenêtre, icône, notifications, commandes
-  installer-hooks.nsh  Ce que l'installeur fait en plus de copier l'application
-  src/companion_install.rs  Ajout et retrait du mod, appelés par l'installeur
-src/                   Interface (TypeScript sans framework)
-mod/                   Marketplace locale copiée avec l'application
-  monitor-compagnon/   Mod Claude Code
+crates/monitor-core/   Logic, with no dependency on Tauri
+  src/registry.rs      Process registry and check that processes live
+  src/desktop.rs       Claude Desktop's session files
+  src/transcript.rs    Incremental reading of transcripts
+  src/git_pr.rs        git and gh, on a thread of their own
+  src/aggregate.rs     Merge of the sources, state rules, sorting
+  src/usage.rs         Quota history and estimate of the resets
+  src/companion.rs     The companion mod's files, merge of the quota
+  src/engine.rs        Folder watching and snapshot rebuilding
+  src/i18n.rs          Language of the text the monitor writes itself
+  src/bin/dump.rs      Command-line diagnostic tool
+src-tauri/             Window, icon, notifications, commands
+  installer-hooks.nsh  What the installer does beyond copying the app
+  src/companion_install.rs  Adding and removing the mod, called by the installer
+src/                   Interface (TypeScript with no framework)
+  i18n.ts              English and French text of the window
+mod/                   Local marketplace copied with the app
+  monitor-compagnon/   Claude Code mod
 ```
 
-`crates/monitor-core/src/model.rs` définit le contrat de données, recopié à la main dans `src/types.ts`.
+`crates/monitor-core/src/model.rs` defines the data contract, copied by hand in `src/types.ts`.
 
 ## Tests
 
@@ -198,4 +216,18 @@ cargo test --manifest-path crates/monitor-core/Cargo.toml
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-Hors de Tauri, `pnpm dev` sert l'interface sur http://localhost:1420 avec des données fictives (`src/mock.ts`), utile pour travailler le design.
+```bash
+claude plugin test mod/monitor-compagnon
+```
+
+The mod's tests need a recent `claude`: use the one in `%APPDATA%\Claude\claude-code\<version>\<hash>\`.
+
+Outside Tauri, `pnpm dev` serves the interface on http://localhost:1420 with fictional data (`src/mock.ts`), useful for design work. Add `?lang=en` or `?lang=fr` to pick the language.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).
+
+## License
+
+[MIT](LICENSE).

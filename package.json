@@ -2,6 +2,11 @@
   "name": "claude-session-monitor",
   "private": true,
   "version": "0.1.0",
+  "description": "Live status of the Claude Code sessions in Claude Desktop",
+  "author": "Alexis Crocilla",
+  "license": "MIT",
+  "repository": "github:alexiscrocilla/claude-session-monitor",
+  "packageManager": "pnpm@12.16.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
