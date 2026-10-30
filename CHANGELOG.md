@@ -2,6 +2,10 @@
 
 Notable changes to this project. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- Switching to or from compact mode no longer changes the width of a window that straddles two monitors with different scaling, and no longer nudges a window that sits against a screen edge.
+
 ## 0.1.0 (2026-10-30)
 
 First version.

@@ -21,7 +21,7 @@ use monitor_core::model::{Settings, Snapshot};
 use monitor_core::paths::now_ms;
 use tauri::menu::MenuEvent;
 use tauri::{
-    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, RunEvent, State, Url,
+    AppHandle, Emitter, LogicalSize, Manager, Monitor, PhysicalPosition, RunEvent, State, Url,
     WebviewWindow, WindowEvent,
 };
 use tauri_plugin_notification::NotificationExt;
@@ -633,9 +633,32 @@ fn clamp_into(window: Rect, area: Rect) -> (i32, i32) {
     )
 }
 
-fn outer_rect(window: &WebviewWindow) -> tauri::Result<Rect> {
-    let position = window.outer_position()?;
-    let size = window.outer_size()?;
+/// Area, in pixels, that two rectangles share.
+fn overlap(a: Rect, b: Rect) -> i64 {
+    fn axis(a: i32, a_len: i32, b: i32, b_len: i32) -> i64 {
+        let end = (i64::from(a) + i64::from(a_len)).min(i64::from(b) + i64::from(b_len));
+        (end - i64::from(a.max(b))).max(0)
+    }
+    axis(a.x, a.w, b.x, b.w) * axis(a.y, a.h, b.y, b.h)
+}
+
+/// Of the `monitors` (work area and scale) at `scale`, the work area `window`
+/// overlaps most. None when it overlaps none of them.
+fn area_at_scale(window: Rect, scale: f64, monitors: &[(Rect, f64)]) -> Option<Rect> {
+    monitors
+        .iter()
+        .filter(|(_, monitor_scale)| (monitor_scale - scale).abs() < f64::EPSILON)
+        .map(|&(area, _)| (overlap(window, area), area))
+        .filter(|&(shared, _)| shared > 0)
+        .max_by_key(|&(shared, _)| shared)
+        .map(|(_, area)| area)
+}
+
+/// The window's client area. That is what shows: its outer rectangle also
+/// holds the invisible borders it is resized by.
+fn client_rect(window: &WebviewWindow) -> tauri::Result<Rect> {
+    let position = window.inner_position()?;
+    let size = window.inner_size()?;
     Ok(Rect {
         x: position.x,
         y: position.y,
@@ -644,20 +667,39 @@ fn outer_rect(window: &WebviewWindow) -> tauri::Result<Rect> {
     })
 }
 
-/// Work area (screen minus taskbar) of the monitor the window is on, or of
-/// the nearest one.
-fn work_area(window: &WebviewWindow) -> Option<Rect> {
-    let monitor = window
-        .current_monitor()
-        .ok()
-        .flatten()
-        .or_else(|| window.primary_monitor().ok().flatten())?;
+fn monitor_area(monitor: &Monitor) -> Rect {
     let area = monitor.work_area();
-    Some(Rect {
+    Rect {
         x: area.position.x,
         y: area.position.y,
         w: i32::try_from(area.size.width).unwrap_or(i32::MAX),
         h: i32::try_from(area.size.height).unwrap_or(i32::MAX),
+    }
+}
+
+/// Work area (screen minus taskbar) of the monitor the window belongs to: the
+/// one it overlaps most among those at its own scale, or else the nearest one.
+/// Windows keeps a window that straddles two monitors at the scale of the one
+/// it came from until about 70% of it has crossed. Moving it onto the other
+/// one would rescale it, and its width would jump.
+fn work_area(window: &WebviewWindow) -> Option<Rect> {
+    let monitors: Vec<_> = window
+        .available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .map(|monitor| (monitor_area(monitor), monitor.scale_factor()))
+        .collect();
+    let at_scale = client_rect(window)
+        .ok()
+        .zip(window.scale_factor().ok())
+        .and_then(|(client, scale)| area_at_scale(client, scale, &monitors));
+    at_scale.or_else(|| {
+        let monitor = window
+            .current_monitor()
+            .ok()
+            .flatten()
+            .or_else(|| window.primary_monitor().ok().flatten())?;
+        Some(monitor_area(&monitor))
     })
 }
 
@@ -671,24 +713,24 @@ fn resize_height(
     origin: Option<(i32, i32)>,
 ) -> tauri::Result<(i32, i32)> {
     let scale = window.scale_factor()?;
-    let inner = window.inner_size()?;
-    let width = inner.to_logical::<f64>(scale).width;
-    let before = outer_rect(window)?;
+    let width = window.inner_size()?.to_logical::<f64>(scale).width;
+    let before = window.outer_position()?;
+    let client = client_rect(window)?;
     let area = work_area(window);
     window.set_size(LogicalSize::new(width, height))?;
 
-    let frame = before
-        .h
-        .saturating_sub(i32::try_from(inner.height).unwrap_or(i32::MAX))
-        .max(0);
+    let (left, top) = (client.x - before.x, client.y - before.y);
     let (x, y) = origin.unwrap_or((before.x, before.y));
     let target = Rect {
-        x,
-        y,
-        w: before.w,
-        h: (height * scale).round() as i32 + frame,
+        x: x + left,
+        y: y + top,
+        w: client.w,
+        h: (height * scale).round() as i32,
     };
-    let (x, y) = area.map_or((x, y), |area| clamp_into(target, area));
+    let (x, y) = area.map_or((x, y), |area| {
+        let (x, y) = clamp_into(target, area);
+        (x - left, y - top)
+    });
     if (x, y) != (before.x, before.y) {
         window.set_position(PhysicalPosition::new(x, y))?;
     }
@@ -697,13 +739,17 @@ fn resize_height(
 
 /// Moves the window back inside its monitor's work area if needed.
 fn keep_on_screen(window: &WebviewWindow) -> tauri::Result<()> {
-    let rect = outer_rect(window)?;
+    let client = client_rect(window)?;
     let Some(area) = work_area(window) else {
         return Ok(());
     };
-    let (x, y) = clamp_into(rect, area);
-    if (x, y) != (rect.x, rect.y) {
-        window.set_position(PhysicalPosition::new(x, y))?;
+    let (x, y) = clamp_into(client, area);
+    if (x, y) != (client.x, client.y) {
+        let outer = window.outer_position()?;
+        window.set_position(PhysicalPosition::new(
+            outer.x + x - client.x,
+            outer.y + y - client.y,
+        ))?;
     }
     Ok(())
 }
@@ -1010,6 +1056,38 @@ mod tests {
             h: 1400,
         };
         assert_eq!(clamp_into(Rect { x: -100, ..inside }, second), (-380, 100));
+    }
+
+    #[test]
+    fn a_straddling_window_stays_on_the_monitor_it_is_scaled_for() {
+        let primary = (AREA, 1.0);
+        let second = (
+            Rect {
+                x: -1920,
+                y: 0,
+                w: 1920,
+                h: 1080,
+            },
+            1.5,
+        );
+        let monitors = [primary, second];
+        // Most of it has crossed, but Windows has not rescaled it yet.
+        let window = Rect {
+            x: -250,
+            y: 200,
+            w: 380,
+            h: 560,
+        };
+        assert_eq!(area_at_scale(window, 1.0, &monitors), Some(primary.0));
+        assert_eq!(area_at_scale(window, 1.5, &monitors), Some(second.0));
+
+        // With both at one scale, the one it overlaps most.
+        let same_scale = [primary, (second.0, 1.0)];
+        assert_eq!(area_at_scale(window, 1.0, &same_scale), Some(second.0));
+
+        let away = Rect { x: 9000, ..window };
+        assert_eq!(area_at_scale(away, 1.0, &monitors), None);
+        assert_eq!(area_at_scale(window, 2.0, &monitors), None);
     }
 
     #[test]
