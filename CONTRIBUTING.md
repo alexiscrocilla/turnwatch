@@ -34,26 +34,18 @@ cargo run --manifest-path crates/monitor-core/Cargo.toml --bin dump -- --summary
 ## Before you open a pull request
 
 ```bash
-pnpm build
+pnpm check
 ```
+
+It builds the interface, runs clippy with warnings denied and runs both test suites. The project has no CI service, so nothing else runs these for you. To have them run before every push:
 
 ```bash
-cargo clippy --manifest-path crates/monitor-core/Cargo.toml --all-targets -- -D warnings
+git config core.hooksPath .githooks
 ```
 
-```bash
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-```
+`git push --no-verify` skips the hook once.
 
-```bash
-cargo test --manifest-path crates/monitor-core/Cargo.toml
-```
-
-```bash
-cargo test --manifest-path src-tauri/Cargo.toml
-```
-
-CI runs all of these. It cannot run the mod's tests, which need Claude Code: if you change `mod/`, run `claude plugin test mod/monitor-compagnon` with the `claude.exe` in `%APPDATA%\Claude\claude-code\<version>\<hash>\`. The `claude` on your PATH may be too old.
+The check leaves out the mod's tests, which need Claude Code: if you change `mod/`, run `claude plugin test mod/monitor-compagnon` with the `claude.exe` in `%APPDATA%\Claude\claude-code\<version>\<hash>\`. The `claude` on your PATH may be too old.
 
 Changes to the interface need a look in both languages and in the narrow window: the window is 380 px wide.
 
@@ -77,6 +69,16 @@ CARGO_TARGET_DIR=/some/scratch/folder pnpm tauri build --config '{"identifier":"
 Then run the installer with `CLAUDE_CONFIG_DIR` pointing at a scratch folder. The variant has its own process name, registry values and application data, and its plugin configuration goes to that folder. To simulate a PC without Claude Code, set `APPDATA` to an empty folder for the installer: NSIS ignores it, but the app reads it.
 
 Silent mode (`/S`) skips the pages that matter, namely the update page and the uninstaller's "Delete the application data" box, so go through the real windows too.
+
+## Releasing
+
+For the maintainer. Raise the version in `src-tauri/tauri.conf.json`, `package.json` and both `Cargo.toml` files, update `CHANGELOG.md`, push `main`, then:
+
+```bash
+pnpm release
+```
+
+It needs `gh` logged in. It builds from a fresh clone of `main` in `%LOCALAPPDATA%\csm-release`, runs the checks there, pushes the tag and opens a draft release with the installer and its SHA-256. Nothing is public until you publish the draft on GitHub.
 
 ## Reporting bugs
 

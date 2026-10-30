@@ -24,7 +24,7 @@ The monitor reads sensitive material: session transcripts, which can hold anythi
 
 ## Verifying a download
 
-The installer is not signed, so Windows does not vouch for it. Each release lists its SHA-256 in `SHA256SUMS.txt`, and the installers are built by the [release workflow](.github/workflows/release.yml) from the tagged commit. To check a download:
+The installer is not signed, so Windows does not vouch for it. Each release lists its SHA-256 in `SHA256SUMS.txt`, and [`scripts/release.mjs`](scripts/release.mjs) builds the installers on the maintainer's computer, from a fresh clone of the tagged commit. To check a download:
 
 ```bash
 sha256sum Claude-Session-Monitor_*_x64-setup.exe

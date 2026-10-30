@@ -202,6 +202,7 @@ src/                   Interface (TypeScript with no framework)
   i18n.ts              English and French text of the window
 mod/                   Local marketplace copied with the app
   monitor-compagnon/   Claude Code mod
+scripts/               Checks before a push, and the release
 ```
 
 `crates/monitor-core/src/model.rs` defines the data contract, copied by hand in `src/types.ts`.
@@ -209,18 +210,14 @@ mod/                   Local marketplace copied with the app
 ## Tests
 
 ```bash
-cargo test --manifest-path crates/monitor-core/Cargo.toml
+pnpm check
 ```
 
-```bash
-cargo test --manifest-path src-tauri/Cargo.toml
-```
+This builds the interface, runs clippy and runs the tests of both crates. The mod has its own tests, which need a recent `claude`: use the one in `%APPDATA%\Claude\claude-code\<version>\<hash>\`.
 
 ```bash
 claude plugin test mod/monitor-compagnon
 ```
-
-The mod's tests need a recent `claude`: use the one in `%APPDATA%\Claude\claude-code\<version>\<hash>\`.
 
 Outside Tauri, `pnpm dev` serves the interface on http://localhost:1420 with fictional data (`src/mock.ts`), useful for design work. Add `?lang=en` or `?lang=fr` to pick the language.
 

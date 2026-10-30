@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stands in for CI. `git config core.hooksPath .githooks` turns it on, and
+# `git push --no-verify` skips it once.
+exec pnpm check

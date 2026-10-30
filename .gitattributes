@@ -1,2 +1,4 @@
 # Stored with LF, whatever each clone's core.autocrlf says.
 * text=auto
+# Git for Windows' sh would read a CRLF as part of the last word.
+.githooks/* text eol=lf
