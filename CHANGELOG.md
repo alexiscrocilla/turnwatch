@@ -2,7 +2,7 @@
 
 Notable changes to this project. Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.2.1 (2026-10-31)
 
 - The window keeps its width and expanded height from one start to the next, updates included.
 - Changing a setting no longer expands a window dragged down to its bar.
