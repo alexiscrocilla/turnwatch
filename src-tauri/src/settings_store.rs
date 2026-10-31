@@ -11,10 +11,35 @@ use std::io;
 use std::path::Path;
 
 use monitor_core::model::Settings;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 /// File name inside the app config folder.
 pub const FILE_NAME: &str = "settings.json";
+/// File name of the window's size, beside the settings.
+pub const WINDOW_SIZE_FILE: &str = "window-size.json";
+
+/// The window's size from one start to the next. Logical pixels, unlike the
+/// position the window-state plugin keeps: the size must survive a monitor of
+/// another scale.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowSize {
+    pub width: f64,
+    /// Height of the window expanded, also while it is compact.
+    pub expanded_height: f64,
+}
+
+/// The saved size; None when there is none, or none that makes sense.
+pub fn load_window_size(path: &Path) -> Option<WindowSize> {
+    let size: WindowSize = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+    let usable = |length: f64| length.is_finite() && length > 0.0;
+    (usable(size.width) && usable(size.expanded_height)).then_some(size)
+}
+
+pub fn save_window_size(path: &Path, size: WindowSize) -> io::Result<()> {
+    write_atomic(path, &serde_json::to_value(size).map_err(io::Error::other)?)
+}
 
 /// What the settings file holds.
 #[derive(Debug)]
@@ -169,6 +194,37 @@ mod tests {
 
     fn file_json(path: &Path) -> Value {
         serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn the_window_size_comes_back_as_saved() {
+        let dir = scratch_dir("window-size");
+        let path = dir.join(WINDOW_SIZE_FILE);
+        assert_eq!(load_window_size(&path), None);
+        let size = WindowSize {
+            width: 412.5,
+            expanded_height: 640.0,
+        };
+        save_window_size(&path, size).unwrap();
+        assert_eq!(load_window_size(&path), Some(size));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_senseless_window_size_is_ignored() {
+        let dir = scratch_dir("window-size-bad");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(WINDOW_SIZE_FILE);
+        for text in [
+            "{",
+            r#"{"width": 380}"#,
+            r#"{"width": 0, "expandedHeight": 560}"#,
+            r#"{"width": 380, "expandedHeight": -1}"#,
+        ] {
+            fs::write(&path, text).unwrap();
+            assert_eq!(load_window_size(&path), None, "{text}");
+        }
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

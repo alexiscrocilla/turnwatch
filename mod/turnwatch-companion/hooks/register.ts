@@ -11,7 +11,9 @@ const VERSION = 1
 const ACTIVE: readonly AgentInfo['status'][] = ['pending', 'running', 'waiting']
 
 // The last content written for this session: nothing to write if it is the same.
-let written = ''
+// No file already says that no sub-agent runs, and `$.fs` cannot remove one, so
+// a session that never starts a sub-agent leaves nothing behind.
+let written = JSON.stringify({ version: VERSION, agents: [] })
 
 async function folder($: EngineInterface) {
   const config = await $.env.get('CLAUDE_CONFIG_DIR')
@@ -80,6 +82,8 @@ async function startClean($: EngineInterface) {
   try {
     const sessionId = await $.session.id()
     if (await $.fs.exists(`${await folder($)}/sessions/${sessionId}.json`)) {
+      // That file is not what this process wrote.
+      written = ''
       await writeAgents($, sessionId, [])
     }
   } catch {

@@ -1592,6 +1592,7 @@ fn update_plan_summary(input: &Value) -> String {
                 i18n::current().pick(format!("{steps} steps"), format!("{steps} étapes"))
             });
     }
+    let lang = i18n::current();
     let mut parts = Vec::new();
     if let Some(done) = input.get("done") {
         let numbers: Vec<String> = one_based_indices(done)
@@ -1599,14 +1600,16 @@ fn update_plan_summary(input: &Value) -> String {
             .map(|i| (i + 1).to_string())
             .collect();
         if !numbers.is_empty() {
-            parts.push(format!("done {}", numbers.join(", ")));
+            let numbers = numbers.join(", ");
+            parts.push(lang.pick(format!("done {numbers}"), format!("terminé {numbers}")));
         }
     }
     if input.get("advance").is_some_and(is_truthy) {
-        parts.push("advance".to_owned());
+        parts.push(lang.pick("advance", "étape suivante").to_owned());
     }
     if let Some(start) = input.get("start").and_then(one_based_index) {
-        parts.push(format!("start {}", start + 1));
+        let step = start + 1;
+        parts.push(lang.pick(format!("start {step}"), format!("démarre {step}")));
     }
     parts.join(" · ")
 }
@@ -1645,7 +1648,7 @@ fn send_message_summary(input: &Value) -> String {
     let to = first_str(input, &["to", "recipient"]);
     let what = first_str(input, &["summary", "message", "content"]);
     match (to.is_empty(), what.is_empty()) {
-        (false, false) => format!("{to} : {what}"),
+        (false, false) => i18n::current().pick(format!("{to}: {what}"), format!("{to} : {what}")),
         (false, true) => to,
         _ => what,
     }
@@ -3001,7 +3004,7 @@ mod tests {
                 json!({"questions": [{"question": "On continue ?", "header": "Suite"}]}),
                 "On continue ?",
             ),
-            ("SendMessage", json!({"to": "banc", "summary": "Relis"}), "banc : Relis"),
+            ("SendMessage", json!({"to": "banc", "summary": "Relis"}), "banc: Relis"),
             ("TaskUpdate", json!({"taskId": "2", "status": "completed"}), "#2 completed"),
             ("mcp__Claude_Browser__computer", json!({"action": "screenshot"}), "screenshot"),
             ("mcp__ccd_pr__get_status", json!({}), ""),

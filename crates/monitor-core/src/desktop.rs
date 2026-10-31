@@ -489,6 +489,9 @@ pub struct DesktopIndex {
     root: PathBuf,
     files: HashMap<PathBuf, CachedFile>,
     sessions: HashMap<String, DesktopSession>,
+    /// The latest refresh listed every folder and holds a session for every
+    /// file it found.
+    complete: bool,
 }
 
 impl DesktopIndex {
@@ -499,6 +502,7 @@ impl DesktopIndex {
             root,
             files: HashMap::new(),
             sessions: HashMap::new(),
+            complete: false,
         }
     }
 
@@ -540,6 +544,11 @@ impl DesktopIndex {
                 dirty = true;
             }
         }
+        self.complete = scan.complete
+            && scan.unlisted.is_empty()
+            && scan.files.iter().all(|(path, _)| {
+                self.files.get(path).is_some_and(|cached| cached.session.is_some())
+            });
 
         if !dirty {
             return Ok(false);
@@ -555,6 +564,13 @@ impl DesktopIndex {
     /// Sessions by `host_session_id`.
     pub fn sessions(&self) -> &HashMap<String, DesktopSession> {
         &self.sessions
+    }
+
+    /// True when a session missing from [`DesktopIndex::sessions`] is really
+    /// gone. False while a folder or a file could not be read: a file being
+    /// rewritten at the first refresh has no session yet.
+    pub fn is_complete(&self) -> bool {
+        self.complete
     }
 
     /// One session per id; when two files claim the same id, the most
@@ -1243,8 +1259,35 @@ mod tests {
         let tree = TempTree::new("empty");
         let mut index = DesktopIndex::new(tree.0.clone());
         assert!(index.sessions().is_empty());
+        assert!(!index.is_complete(), "nothing was read yet");
         assert_eq!(index.refresh(), Ok(false));
         assert!(index.sessions().is_empty());
+        assert!(index.is_complete());
+    }
+
+    #[test]
+    fn a_file_never_read_leaves_the_index_incomplete() {
+        let tree = TempTree::new("incomplete");
+        let org = tree.org();
+        let mut index = DesktopIndex::new(tree.0.clone());
+        let file = org.join("local_one.json");
+
+        // Caught while Desktop rewrites it, at the first refresh.
+        fs::write(&file, "{\"sessionId\":").unwrap();
+        fs::write(org.join("local_two.json"), session_json("local_two", "Two")).unwrap();
+        assert_eq!(index.refresh(), Ok(true));
+        assert!(!index.sessions().contains_key("local_one"));
+        assert!(!index.is_complete());
+
+        fs::write(&file, session_json("local_one", "One")).unwrap();
+        assert_eq!(index.refresh(), Ok(true));
+        assert!(index.is_complete());
+
+        // Later rewrites keep the session read before: nothing is missing.
+        fs::write(&file, "{\"sessionId\":").unwrap();
+        assert_eq!(index.refresh(), Ok(false));
+        assert!(index.sessions().contains_key("local_one"));
+        assert!(index.is_complete());
     }
 
     #[test]

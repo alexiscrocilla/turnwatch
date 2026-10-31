@@ -65,6 +65,17 @@ pub fn parse_entry(json: &str) -> Option<RegistryEntry> {
 /// are skipped. Fails only when `dir` itself cannot be listed. The result is
 /// sorted by pid, then session id.
 pub fn read_live(dir: &Path) -> Result<Vec<RegistryEntry>, String> {
+    read_live_after(dir, &[])
+}
+
+/// [`read_live`] for a caller that read the registry before: a file that
+/// cannot be read or parsed now keeps the entry `previous` has for its pid,
+/// so a process caught rewriting its file does not look gone. A file removed
+/// takes its entry with it, and a kept entry must still be alive.
+pub fn read_live_after(
+    dir: &Path,
+    previous: &[RegistryEntry],
+) -> Result<Vec<RegistryEntry>, String> {
     let listing = std::fs::read_dir(dir).map_err(|e| {
         let dir = dir.display();
         i18n::current().pick(
@@ -76,8 +87,15 @@ pub fn read_live(dir: &Path) -> Result<Vec<RegistryEntry>, String> {
     let mut entries: Vec<RegistryEntry> = listing
         .filter_map(Result::ok)
         .filter(|item| is_registry_file_name(&item.file_name()))
-        .filter_map(|item| std::fs::read(item.path()).ok())
-        .filter_map(|bytes| parse_entry(&String::from_utf8_lossy(&bytes)))
+        .flat_map(|item| {
+            let entry = std::fs::read(item.path())
+                .ok()
+                .and_then(|bytes| parse_entry(&String::from_utf8_lossy(&bytes)));
+            match entry {
+                Some(entry) => vec![entry],
+                None => entries_of_file(previous, &item.file_name()),
+            }
+        })
         .filter(|entry| is_alive(entry.pid, entry.proc_start.as_deref()))
         .collect();
 
@@ -87,6 +105,19 @@ pub fn read_live(dir: &Path) -> Result<Vec<RegistryEntry>, String> {
             .then_with(|| a.session_id.cmp(&b.session_id))
     });
     Ok(entries)
+}
+
+/// The entries of `previous` for the pid a `<pid>.json` file is named after.
+fn entries_of_file(previous: &[RegistryEntry], file_name: &std::ffi::OsStr) -> Vec<RegistryEntry> {
+    let pid = file_name
+        .to_str()
+        .and_then(|name| name.split('.').next())
+        .and_then(|stem| stem.parse::<u32>().ok());
+    previous
+        .iter()
+        .filter(|entry| Some(entry.pid) == pid)
+        .cloned()
+        .collect()
 }
 
 /// True when `pid` is running and, when `proc_start` is given, its creation
@@ -155,6 +186,17 @@ fn parse_filetime(s: &str) -> Option<u64> {
     s.trim().parse::<u64>().ok()
 }
 
+/// A registry start value on the FILETIME scale. .NET ticks stay in local
+/// time: the result is off by the UTC offset, enough to order two processes
+/// but not to compare it with a creation time ([`start_matches`] does that).
+pub(crate) fn start_as_filetime(start: u64) -> Option<u64> {
+    if start <= TICKS_SCALE_MIN {
+        Some(start)
+    } else {
+        start.checked_sub(TICKS_AT_FILETIME_EPOCH)
+    }
+}
+
 /// True when a registry start value matches the creation FILETIME Windows
 /// reports. A FILETIME must match within [`PROC_START_TOLERANCE`]. .NET ticks
 /// are local time, so they may differ from it by a whole number of quarter
@@ -163,7 +205,7 @@ fn start_matches(expected: u64, created: u64) -> bool {
     if expected <= TICKS_SCALE_MIN {
         return created.abs_diff(expected) <= PROC_START_TOLERANCE;
     }
-    let Some(naive) = expected.checked_sub(TICKS_AT_FILETIME_EPOCH) else {
+    let Some(naive) = start_as_filetime(expected) else {
         return false;
     };
     let diff = naive.abs_diff(created);
@@ -596,6 +638,43 @@ mod tests {
         let live = read_live(&dir.0).expect("read_live");
         let ids: Vec<&str> = live.iter().map(|e| e.session_id.as_str()).collect();
         assert_eq!(ids, ["current"]);
+    }
+
+    #[test]
+    fn a_file_being_rewritten_keeps_its_previous_entry() {
+        let me = std::process::id();
+        let dir = TempDir::new("rewrite");
+        let name = format!("{me}.json");
+        dir.write(&name, &entry_json(me, "kept", None));
+        let before = read_live(&dir.0).expect("read_live");
+        assert_eq!(before.len(), 1);
+
+        dir.write(&name, "{\"pid\":");
+        assert!(read_live(&dir.0).expect("read_live").is_empty(), "nothing to fall back on");
+        assert_eq!(read_live_after(&dir.0, &before).expect("read_live_after"), before);
+
+        std::fs::remove_file(dir.0.join(&name)).expect("remove");
+        let after = read_live_after(&dir.0, &before).expect("read_live_after");
+        assert!(after.is_empty(), "a file removed takes its entry with it");
+    }
+
+    #[test]
+    fn a_dead_process_keeps_no_entry() {
+        let dir = TempDir::new("rewrite-dead");
+        dir.write(&format!("{DEAD_PID}.json"), "");
+        let previous = [RegistryEntry {
+            pid: DEAD_PID,
+            session_id: "dead".into(),
+            ..RegistryEntry::default()
+        }];
+        assert!(read_live_after(&dir.0, &previous).expect("read_live_after").is_empty());
+    }
+
+    #[test]
+    fn start_values_reach_the_filetime_scale() {
+        assert_eq!(start_as_filetime(134_444_736_000_000_000), Some(134_444_736_000_000_000));
+        assert_eq!(start_as_filetime(639_355_968_000_000_000), Some(134_444_736_000_000_000));
+        assert_eq!(start_as_filetime(TICKS_SCALE_MIN + 1), None);
     }
 
     #[test]

@@ -62,7 +62,9 @@ struct Shell {
     /// Source of truth for the settings; the sink reads it for toasts.
     settings: Arc<Mutex<Settings>>,
     settings_path: Option<PathBuf>,
-    /// Height of the window before it went compact.
+    window_size_path: Option<PathBuf>,
+    /// Height of the window before it went compact, or as the last start
+    /// left it.
     expanded_height: Mutex<Option<f64>>,
     /// Where the compact bar was before the window was last expanded.
     compact_return: Mutex<Option<CompactReturn>>,
@@ -137,9 +139,10 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             // Logoff, shutdown or Quitter: the process may end before the
-            // engine's worker writes its latest acks.
+            // engine's worker writes its latest acks, and the window's size
+            // is saved nowhere else.
             if let RunEvent::Exit = event {
-                flush_engine(app);
+                save_state(app);
             }
         });
 }
@@ -172,6 +175,12 @@ fn setup(app: &AppHandle) -> tauri::Result<()> {
         .map(settings_store::load)
         .unwrap_or_default();
     i18n::set(i18n::resolve(&settings.language));
+    let window_size_path = config_dir
+        .as_ref()
+        .map(|dir| dir.join(settings_store::WINDOW_SIZE_FILE));
+    let saved_size = window_size_path
+        .as_deref()
+        .and_then(settings_store::load_window_size);
 
     autostart::repair(app);
     tray::create(
@@ -185,6 +194,9 @@ fn setup(app: &AppHandle) -> tauri::Result<()> {
 
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
         let _ = window.set_always_on_top(settings.always_on_top);
+        if let Some(size) = saved_size {
+            let _ = window.set_size(LogicalSize::new(size.width, size.expanded_height));
+        }
         // The restored position may be off screen: a monitor that is gone, or
         // a compact bar saved near the bottom edge.
         if settings.compact {
@@ -217,7 +229,8 @@ fn setup(app: &AppHandle) -> tauri::Result<()> {
         engine,
         settings: shared,
         settings_path,
-        expanded_height: Mutex::new(None),
+        window_size_path,
+        expanded_height: Mutex::new(saved_size.map(|size| size.expanded_height)),
         compact_return: Mutex::new(None),
         apply_lock: Mutex::new(()),
         feed,
@@ -482,11 +495,15 @@ fn start_toast_ticker(
         .spawn(move || {
             loop {
                 std::thread::sleep(TOAST_TICK);
-                let snapshot = engine.snapshot();
                 let current = lock(&settings).clone();
                 let now = now_ms();
-                let mut due = lock(&notifier).tick(&snapshot, &current, now);
-                due.extend(lock(&notifier).quota_stop(&snapshot, &current, now, user_idle_ms()));
+                let mut notifier = lock(&notifier);
+                // Read under the lock: a snapshot older than the episodes the
+                // engine just held back would end them.
+                let snapshot = engine.snapshot();
+                let mut due = notifier.tick(&snapshot, &current, now);
+                due.extend(notifier.quota_stop(&snapshot, &current, now, user_idle_ms()));
+                drop(notifier);
                 show_toasts(&app, due);
             }
         });
@@ -551,10 +568,7 @@ fn update_settings(
 
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
         let _ = window.set_always_on_top(new.always_on_top);
-        // A window dragged down to the bar is expanded too, even though the
-        // setting already says "not compact".
-        let bar_only = logical_height(&window).is_ok_and(|h| h <= BAR_ONLY_HEIGHT);
-        if new.compact != old.compact || (!new.compact && bar_only) {
+        if new.compact != old.compact {
             apply_compact(&shell, &window, new.compact);
         }
     }
@@ -602,12 +616,35 @@ fn apply_compact(shell: &Shell, window: &WebviewWindow, compact: bool) {
     }
 }
 
+/// A window dragged down to the bar offers to expand with the setting already
+/// off, so asking for that changes no setting: only the height tells.
+fn expand_dragged_bar(app: &AppHandle) {
+    let (Some(shell), Some(window)) = (app.try_state::<Shell>(), app.get_webview_window(MAIN_WINDOW))
+    else {
+        return;
+    };
+    let _guard = lock(&shell.apply_lock);
+    if logical_height(&window).is_ok_and(|height| height <= BAR_ONLY_HEIGHT) {
+        apply_compact(&shell, &window, false);
+    }
+}
+
 /// Height to restore when expanding: the remembered one, never shorter than
 /// [`MIN_EXPANDED_HEIGHT`].
 fn expanded_height(remembered: Option<f64>) -> f64 {
     remembered
         .unwrap_or(DEFAULT_EXPANDED_HEIGHT)
         .max(MIN_EXPANDED_HEIGHT)
+}
+
+/// Height the next start expands to: the window's own when it is expanded,
+/// else the remembered one.
+fn kept_height(current: f64, remembered: Option<f64>) -> f64 {
+    if current >= MIN_EXPANDED_HEIGHT {
+        current
+    } else {
+        expanded_height(remembered)
+    }
 }
 
 fn logical_height(window: &WebviewWindow) -> tauri::Result<f64> {
@@ -869,7 +906,32 @@ fn menu_toggle(id: &str) -> Option<fn(&mut Settings)> {
 /// What the next start needs, saved before the process ends.
 fn save_state(app: &AppHandle) {
     let _ = app.save_window_state(StateFlags::POSITION);
+    save_window_size(app);
     flush_engine(app);
+}
+
+fn save_window_size(app: &AppHandle) {
+    let (Some(shell), Some(window)) = (app.try_state::<Shell>(), app.get_webview_window(MAIN_WINDOW))
+    else {
+        return;
+    };
+    if let (Some(path), Some(size)) = (&shell.window_size_path, window_size(&shell, &window)) {
+        let _ = settings_store::save_window_size(path, size);
+    }
+}
+
+/// The size to keep, None when the window cannot tell: a minimized one has
+/// lost its own.
+fn window_size(shell: &Shell, window: &WebviewWindow) -> Option<settings_store::WindowSize> {
+    if window.is_minimized().unwrap_or(true) {
+        return None;
+    }
+    let scale = window.scale_factor().ok()?;
+    let size = window.inner_size().ok()?.to_logical::<f64>(scale);
+    (size.width > 0.0).then(|| settings_store::WindowSize {
+        width: size.width,
+        expanded_height: kept_height(size.height, *lock(&shell.expanded_height)),
+    })
 }
 
 fn quit(app: &AppHandle) {
@@ -924,7 +986,11 @@ async fn ack_session(shell: State<'_, Shell>, key: String) -> Result<(), String>
 
 #[tauri::command]
 async fn set_compact(app: AppHandle, compact: bool) -> Result<Settings, String> {
-    update_settings(&app, |settings| settings.compact = compact)
+    let settings = update_settings(&app, |settings| settings.compact = compact)?;
+    if !compact {
+        expand_dragged_bar(&app);
+    }
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -1113,6 +1179,13 @@ mod tests {
         assert_eq!(expanded_height(None), DEFAULT_EXPANDED_HEIGHT);
         assert_eq!(expanded_height(Some(44.0)), MIN_EXPANDED_HEIGHT);
         assert_eq!(expanded_height(Some(640.0)), 640.0);
+    }
+
+    #[test]
+    fn the_next_start_expands_to_the_window_or_what_it_remembers() {
+        assert_eq!(kept_height(700.0, Some(300.0)), 700.0, "expanded");
+        assert_eq!(kept_height(44.0, Some(640.0)), 640.0, "compact");
+        assert_eq!(kept_height(44.0, None), DEFAULT_EXPANDED_HEIGHT);
     }
 
     #[test]

@@ -152,7 +152,7 @@ They can be changed from the icon's menu and are saved in `%APPDATA%\local.turnw
 
 ## What the app writes on the machine
 
-- `%APPDATA%\local.turnwatch\`: `settings.json`, `acks.json` (sessions already seen) and the window's position. During an update of a hidden window, also `update-stay-hidden`, gone once the app has restarted.
+- `%APPDATA%\local.turnwatch\`: `settings.json`, `acks.json` (sessions already seen), and the window's position and size. During an update of a hidden window, also `update-stay-hidden`, gone once the app has restarted.
 - `%TEMP%\Turnwatch-<version>-updater-…\`: the installer of each update, which stays there until Windows cleans the folder.
 - `HKCU\Software\Classes\AppUserModelId\local.turnwatch` and `%LOCALAPPDATA%\local.turnwatch\toast-icon.png`: the name and icon of the notifications. Deleting both is enough to undo them.
 - Only if "Start with Windows" is ticked: the `local.turnwatch` value of `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, which holds the path of the executable. That is what "Startup apps" lists in Windows' settings. Turning the app off there (or in Task Manager) also unticks the menu item; ticking it again clears that Windows setting (the value of the same name under `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run`). Unticking the item removes both; if the executable has moved, the value is put back on its new path at the next launch. The development build (`pnpm tauri dev`) does not offer this item: it depends on the development server.
@@ -172,7 +172,7 @@ Uninstalling removes all of that, as well as the mod, its marketplace, the start
 `mod/turnwatch-companion` is a Claude Code mod, added by the installer. Without it, everything works as described above, with Desktop as the only source of the quota. With it, each session writes what Claude Code's engine already knows, with no extra network call and without reading any credential:
 
 - `quota.json`: the percentage and exact reset time of the 5-hour and 7-day windows, after each turn and at each point gained. No more right-click on Desktop's icon;
-- `sessions/<id>.json`: the session's running sub-agents.
+- `sessions/<id>.json`: the session's running sub-agents, from its first one on. The file stays after the session, empty.
 
 The installer calls `turnwatch.exe --install-companion`, which does the work with the most recent `claude.exe` in `%APPDATA%\Claude\claude-code`: the `turnwatch` marketplace points at the app's `companion\` folder, from which Claude Code reads the mod. An install of the same mod from another marketplace is removed once this one is in place, so the same files are not written twice.
 

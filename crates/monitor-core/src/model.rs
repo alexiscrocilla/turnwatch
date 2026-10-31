@@ -556,7 +556,8 @@ pub struct Counts {
 pub struct SourceHealth {
     pub registry_ok: bool,
     pub desktop_ok: bool,
-    /// None until `gh` has been tried.
+    /// None until `gh` has answered, and while it is not installed: it is
+    /// optional.
     pub gh_ok: Option<bool>,
     pub errors: Vec<String>,
 }

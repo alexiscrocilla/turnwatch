@@ -93,6 +93,17 @@ test('active sub-agents are written, and removed as soon as they end', async ($,
   expect(read()).toEqual({ version: 1, agents: [] })
 })
 
+test('a session without sub-agents leaves no file', async ($, on) => {
+  const below = engine(on)
+  on('turn.complete', () => ({ text: '' }))
+  on('session.end', (_, e) => ({ sessionId: e.sessionId }))
+
+  await $.turn.complete({ reason: 'answer', answer: 'done' } as never)
+  await $.session.end({ reason: 'other', sessionId: 'session-1' } as never)
+
+  expect(below.files.size).toBe(0)
+})
+
 test('a resumed session starts without sub-agents', async ($, on) => {
   const below = engine(on)
   on('session.start', (_, e) => ({ cwd: e.cwd }))

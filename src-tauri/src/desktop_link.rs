@@ -58,8 +58,8 @@ fn message(en: &str, fr: &str) -> String {
 /// and raises Desktop's main window. `before_link` runs right before the link
 /// is opened. Returns true when Desktop was asked to show the session (the
 /// link was handed over), false when only its window could be raised. A key
-/// that is not a Desktop id fails without touching Desktop. Errors are French
-/// messages meant for the UI.
+/// that is not a Desktop id fails without touching Desktop. Errors are
+/// messages meant for the UI, in the language in use.
 pub fn open_session(
     app: &AppHandle,
     key: &str,

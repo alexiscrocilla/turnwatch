@@ -174,7 +174,7 @@ impl GitPrService {
             .collect()
     }
 
-    /// None until `gh` has been run once.
+    /// None until `gh` has answered once, and while it is not installed.
     pub fn gh_ok(&self) -> Option<bool> {
         self.shared.lock().gh_ok
     }
@@ -351,8 +351,9 @@ impl LookupPlan {
 /// Why a `gh` call gave no answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GhFailure {
-    /// Every lookup would fail too: not installed, not logged in, network,
-    /// rate limit.
+    /// `gh` is not installed: it is optional, so nothing is wrong.
+    Missing,
+    /// Every lookup would fail too: not logged in, network, rate limit.
     Global,
     /// This lookup only: no access to the repository, SSO, timeout.
     Lookup,
@@ -804,6 +805,7 @@ impl Worker {
             }
             Err(failure) => {
                 match failure {
+                    GhFailure::Missing => self.gh_missing(),
                     GhFailure::Global => self.gh_failed(),
                     GhFailure::Lookup => self.lookup_failed(lookup),
                     GhFailure::Transient => {}
@@ -852,7 +854,7 @@ impl Worker {
             return Ok(None);
         }
         match self.runner.run("gh", &args, dir, &self.shared.shutdown) {
-            Err(RunError::NotInstalled) => Err(GhFailure::Global),
+            Err(RunError::NotInstalled) => Err(GhFailure::Missing),
             Err(RunError::TimedOut) => Err(GhFailure::Lookup),
             Err(RunError::Cancelled | RunError::Io(_)) => Err(GhFailure::Transient),
             Ok(out) if out.success => match parse_gh_pr(&out.stdout, source, now_ms()) {
@@ -875,6 +877,12 @@ impl Worker {
 
     fn gh_failed(&mut self) {
         self.gh_ok = Some(false);
+        self.gh_backoff_until = Some(Instant::now() + GH_BACKOFF);
+    }
+
+    /// Nothing to report, but no use asking again before the back-off ends.
+    fn gh_missing(&mut self) {
+        self.gh_ok = None;
         self.gh_backoff_until = Some(Instant::now() + GH_BACKOFF);
     }
 
@@ -2800,6 +2808,37 @@ mod tests {
 
         h.service.bump("b");
         assert!(h.wait_until(|_| h.calls("gh ") == 2), "bump bypasses the back-off");
+    }
+
+    #[test]
+    fn gh_not_installed_is_no_failure() {
+        let h = Harness::new(Arc::new(|program, _args| {
+            if program == "git" {
+                failed("fatal: not a git repository")
+            } else {
+                Err(RunError::NotInstalled)
+            }
+        }));
+        let binding = |n: u32| DesktopPrBinding {
+            number: Some(n),
+            url: Some(format!("https://github.com/example-org/example-repo/pull/{n}")),
+            repository: None,
+            state: Some("OPEN".into()),
+        };
+        let mut first = request("a", &repo_dir());
+        first.desktop_pr = Some(binding(3));
+        h.service.track(vec![first.clone()]);
+        assert!(h.wait_until(|_| h.calls("gh ") == 1));
+        assert!(h.wait_until(|s| s.results().contains_key("a")));
+        assert_eq!(h.service.gh_ok(), None, "gh is optional");
+        assert_eq!(h.service.results()["a"].1.as_ref().map(|pr| pr.number), Some(3));
+
+        let mut second = request("b", &repo_dir());
+        second.desktop_pr = Some(binding(4));
+        h.service.track(vec![first, second]);
+        assert!(h.wait_until(|s| s.results().contains_key("b")));
+        thread::sleep(Duration::from_millis(150));
+        assert_eq!(h.calls("gh "), 1, "looked for again only after the back-off");
     }
 
     #[test]

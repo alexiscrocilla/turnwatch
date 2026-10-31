@@ -11,6 +11,7 @@ use crate::model::{
     ProposedTask, RegistryEntry, RunningAgent, SessionRef, SessionState, SessionView, Settings, Snapshot,
     SourceHealth, TaskSuggestion, ToolActivity, TranscriptInfo, Transition, TurnOrigin,
 };
+use crate::registry::start_as_filetime;
 use crate::transcript::plain_text;
 
 /// Everything the engine read from the sources, ready to be joined.
@@ -784,10 +785,11 @@ fn launch_order(entry: &RegistryEntry) -> (Option<i64>, u32) {
     (started, entry.pid)
 }
 
-/// Converts a Windows FILETIME (100 ns ticks since 1601) written as a decimal
-/// string to Unix milliseconds.
+/// Converts a process start written as a decimal string to Unix milliseconds:
+/// a Windows FILETIME (100 ns ticks since 1601), or .NET ticks, which keep
+/// their local time ([`start_as_filetime`]).
 fn filetime_to_unix_ms(raw: &str) -> Option<i64> {
-    let ticks = raw.trim().parse::<u64>().ok()?;
+    let ticks = start_as_filetime(raw.trim().parse::<u64>().ok()?)?;
     i64::try_from(ticks / 10_000)
         .ok()
         .map(|ms| ms - FILETIME_UNIX_OFFSET_MS)
@@ -2816,6 +2818,12 @@ mod tests {
         assert_eq!(filetime_to_unix_ms(""), None);
         assert_eq!(filetime_to_unix_ms("99999999999999999999999"), None);
         assert!(filetime_to_unix_ms(&u64::MAX.to_string()).is_some());
+    }
+
+    #[test]
+    fn dotnet_ticks_convert_like_a_filetime() {
+        assert_eq!(filetime_to_unix_ms("639355968000000000"), Some(1_800_000_000_000));
+        assert_eq!(filetime_to_unix_ms("134444736000000000"), Some(1_800_000_000_000));
     }
 
     #[test]

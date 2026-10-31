@@ -668,8 +668,8 @@ impl Worker {
                 let latest = latest_activity(pass.desktop.get(key), self.turns.ended_at.get(key));
                 credit(&mut shared.acks, key, latest, now);
             }
-            // A source that could not be read would forget saved acks.
-            if pass.registry_ok && pass.desktop_ok {
+            // A source that could not be read in full would forget saved acks.
+            if pass.registry_ok && pass.desktop_complete {
                 let keep: HashSet<&str> = pass
                     .keys
                     .iter()
@@ -863,6 +863,8 @@ struct Pass<'a> {
     registry_ok: bool,
     desktop: &'a HashMap<String, DesktopSession>,
     desktop_ok: bool,
+    /// Every Desktop file was read: a session not in `desktop` is gone.
+    desktop_complete: bool,
     /// By CLI session id, for the listed sessions only.
     transcripts: HashMap<String, TranscriptInfo>,
     /// CLI ids of the listed sessions, live or stopped, whose transcripts
@@ -913,13 +915,14 @@ impl Readers {
         now: i64,
         errors: &mut Vec<String>,
     ) -> Pass<'a> {
-        let (registry, registry_ok) = match guarded(|| registry::read_live(&paths.sessions)) {
+        let read = guarded(|| registry::read_live_after(&paths.sessions, &self.last_registry));
+        let (registry, registry_ok) = match read {
             Ok(Ok(entries)) => {
                 self.last_registry = entries.clone();
                 (entries, true)
             }
             Ok(Err(e)) => {
-                errors.push(format!("Registre : {e}"));
+                errors.push(source_error(REGISTRY, &e));
                 (self.last_registry.clone(), false)
             }
             Err(msg) => {
@@ -936,11 +939,12 @@ impl Readers {
             }
         }
         let mut desktop_ok = false;
+        let mut desktop_complete = false;
         let mut desktop = empty_desktop();
         if let Some(index) = &mut self.desktop {
             match guarded(|| index.refresh()) {
                 Ok(Ok(_)) => desktop_ok = true,
-                Ok(Err(e)) => errors.push(format!("Desktop : {e}")),
+                Ok(Err(e)) => errors.push(source_error(DESKTOP, &e)),
                 Err(msg) => errors.push(internal_error(DESKTOP, &msg)),
             }
             let index: &'a DesktopIndex = index;
@@ -951,6 +955,7 @@ impl Readers {
                     errors.push(internal_error(DESKTOP, &msg));
                 }
             }
+            desktop_complete = desktop_ok && index.is_complete();
         }
 
         let keys: Vec<String> = registry.iter().map(key_of).collect();
@@ -1005,6 +1010,7 @@ impl Readers {
             registry_ok,
             desktop,
             desktop_ok,
+            desktop_complete,
             transcripts,
             listed_ids,
             keys,
@@ -1565,7 +1571,10 @@ impl AckStore {
                 self.error = None;
             }
             Err(e) => {
-                self.error = Some(format!("Impossible d'enregistrer les sessions vues : {e}"));
+                self.error = Some(i18n::current().pick(
+                    format!("Could not save the sessions already seen: {e}"),
+                    format!("Impossible d'enregistrer les sessions vues : {e}"),
+                ));
             }
         }
     }
@@ -1648,7 +1657,7 @@ fn guarded<T>(f: impl FnOnce() -> T) -> Result<T, String> {
         } else if let Some(s) = payload.downcast_ref::<String>() {
             s.clone()
         } else {
-            "panique".to_owned()
+            i18n::current().pick("panic", "panique").to_owned()
         }
     })
 }
@@ -1660,7 +1669,13 @@ fn internal_error((en, fr): Part, msg: &str) -> String {
     )
 }
 
-/// A part of the engine in [`internal_error`], in English and in French.
+/// What a source reports about itself, after its name.
+fn source_error((en, fr): Part, error: &str) -> String {
+    i18n::current().pick(format!("{en}: {error}"), format!("{fr} : {error}"))
+}
+
+/// A part of the engine in [`internal_error`] and [`source_error`], in English
+/// and in French.
 type Part = (&'static str, &'static str);
 const GIT_PR: Part = ("Git/PR service", "Service Git/PR");
 const AGGREGATION: Part = ("Aggregation", "Agrégation");
@@ -2289,7 +2304,7 @@ mod tests {
         dir.write("state", "a file where the folder should be");
         let mut store = AckStore::new(dir.0.join("state"));
         store.save(&[("local_a".to_owned(), 1)].into(), true);
-        assert!(store.error.as_deref().is_some_and(|e| e.starts_with("Impossible d'enregistrer")));
+        assert!(store.error.as_deref().is_some_and(|e| e.starts_with("Could not save")));
     }
 
     #[test]
@@ -2573,6 +2588,7 @@ mod tests {
             registry_ok: true,
             desktop,
             desktop_ok: true,
+            desktop_complete: true,
             transcripts: HashMap::new(),
             listed_ids: HashSet::new(),
             keys: Vec::new(),
@@ -3051,6 +3067,7 @@ mod tests {
             registry_ok: true,
             desktop: &desktop,
             desktop_ok: true,
+            desktop_complete: true,
             transcripts,
             listed_ids: HashSet::new(),
             keys: vec!["cli:cli-a".into(), "local_b".into()],
@@ -3110,6 +3127,7 @@ mod tests {
             registry_ok: true,
             desktop: &desktop,
             desktop_ok: true,
+            desktop_complete: true,
             transcripts: HashMap::new(),
             listed_ids: HashSet::new(),
             keys: vec!["local_a".into(), "local_a".into(), "local_a".into()],
@@ -3151,6 +3169,7 @@ mod tests {
             registry_ok: true,
             desktop: &desktop,
             desktop_ok: true,
+            desktop_complete: true,
             transcripts,
             listed_ids: HashSet::new(),
             keys: Vec::new(),
