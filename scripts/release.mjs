@@ -89,8 +89,11 @@ let bundle
 let files
 if (MAC) {
   bundle = join(TARGET, 'release', 'bundle', 'macos')
-  // The updater's archive holds the bundle itself, as Tauri makes it.
-  run(`tar -czf "${update}" Turnwatch.app`, { cwd: bundle })
+  // The updater's archive holds the bundle itself, as Tauri makes it, and
+  // nothing else: AppleDouble `._` files would land in the updated bundle and
+  // break its signature.
+  const plainTar = { cwd: bundle, env: { ...process.env, COPYFILE_DISABLE: '1' } }
+  run(`tar --no-mac-metadata --no-xattrs -czf "${update}" Turnwatch.app`, plainTar)
   const image = `Turnwatch_${version}_${arch}.dmg`
   run(`cp "${join(TARGET, 'release', 'bundle', 'dmg', image)}" "${join(bundle, image)}"`)
   files = [update, image]
