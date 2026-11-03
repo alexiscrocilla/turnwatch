@@ -1,6 +1,6 @@
 [package]
 name = "monitor-core"
-version = "0.2.1"
+version = "0.3.0"
 description = "Reads the state of Claude Code sessions from local files"
 authors = ["Alexis Crocilla"]
 license = "MIT"
