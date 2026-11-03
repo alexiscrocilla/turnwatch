@@ -10,10 +10,11 @@ The monitor answers one question: which of my sessions needs me now? Some choice
 - **Read-only.** The app reads Claude Code's and Claude Desktop's files and never writes in them. Only the companion mod writes, and only in `~/.claude/session-monitor`.
 - **Local.** No telemetry, no network call of its own beyond the update check (and `gh`, for PR status), and no credential read, by the app or by the mod.
 - **Quiet.** No continuous animation: it would keep WebView2 busy all day in a window that stays open. Anything that moves does so on an event.
+- **Windows first, macOS too.** Code for one system goes behind `cfg(windows)` or `cfg(target_os = "macos")`; other systems only get stubs that compile. A change on one system must leave the other as it was.
 
 ## Getting started
 
-You need Windows, stable Rust (MSVC), the Visual Studio Build Tools, Node.js and pnpm.
+You need Windows, stable Rust (MSVC), the Visual Studio Build Tools, Node.js and pnpm. On a Mac: stable Rust, the Xcode command line tools, Node.js and pnpm.
 
 ```bash
 pnpm install
@@ -45,7 +46,9 @@ git config core.hooksPath .githooks
 
 `git push --no-verify` skips the hook once.
 
-The check leaves out the mod's tests, which need Claude Code: if you change `mod/`, run `claude plugin test mod/turnwatch-companion` with the `claude.exe` in `%APPDATA%\Claude\claude-code\<version>\<hash>\`. The `claude` on your PATH may be too old.
+The check leaves out the mod's tests, which need Claude Code: if you change `mod/`, run `claude plugin test mod/turnwatch-companion` with the `claude.exe` in `%APPDATA%\Claude\claude-code\<version>\<hash>\` (on macOS, `claude.app/Contents/MacOS/claude` in `~/Library/Application Support/Claude/claude-code/<version>/<hash>/`). The `claude` on your PATH may be too old.
+
+A change to code shared by both systems needs `pnpm check` on both, as each compiles only its own `cfg` branches.
 
 Changes to the interface need a look in both languages and in the narrow window: the window is 380 px wide.
 
@@ -78,6 +81,12 @@ To test an update, build that variant twice, with a `version` of its own each ti
 
 Sign the newer installer with `pnpm tauri signer sign --app-version`, serve it with a `latest.json` like the one [`scripts/release.mjs`](scripts/release.mjs) writes, and install the older one: the app needs an `uninstall.exe` beside it to update itself. The app the installer restarts no longer has your `CLAUDE_CONFIG_DIR`, so stop it before offering it another version: that update's installer would add the mod to your real configuration.
 
+## Testing on macOS
+
+A release build adds the mod to your real Claude Code configuration as soon as it starts; a debug build (`pnpm tauri dev`) never does. Test it from the Finder, not from a terminal: only then does the app get launchd's short PATH, as your users' copy will. `CLAUDE_CONFIG_DIR` keeps the mod out of your configuration, as on Windows, but only when the app inherits it, so start it with `open --env CLAUDE_CONFIG_DIR=/some/scratch/folder src-tauri/target/release/bundle/macos/Turnwatch.app`.
+
+To test an update, use the same throwaway key and local server as on Windows, with a `latest.json` whose `darwin-aarch64` entry points at a signed `Turnwatch.app.tar.gz` (the bundle, compressed with `tar -czf`), and run the older build from `~/Applications`: only a copy in an Applications folder updates itself.
+
 ## Releasing
 
 For the maintainer. Raise the version in `src-tauri/tauri.conf.json`, `package.json` and both `Cargo.toml` files, update `CHANGELOG.md`, push `main`, then:
@@ -87,6 +96,8 @@ pnpm release
 ```
 
 It needs `gh` logged in, the updater's private key in `~/.tauri/turnwatch-updater.key` with its `.pub` beside it, and the key's password in `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. It builds from a fresh clone of `main` in `%LOCALAPPDATA%\turnwatch-release`, runs the checks there, signs the installer, pushes the tag and opens a draft release with the installer, its SHA-256 and `latest.json`. Nothing is public until you publish the draft on GitHub, and publishing it updates every installed app within 6 hours: test the draft's installer first.
+
+Each system builds its own files, so run `pnpm release` on Windows and on a Mac, in either order, before publishing. On the Mac it works in `~/Library/Caches/turnwatch-release`, and adds to the draft the disk image, the bundle the updater downloads (`Turnwatch_<version>_aarch64.app.tar.gz`), its signature in `latest.json` under `darwin-aarch64`, and their SHA-256. The second run finds the draft and merges its files with the first one's. The Mac needs the same key: a draft published with only one system's entry leaves the other system's apps without the update, and their "Check for updates" reports an error until the next release.
 
 Keep a copy of the key and of its password somewhere safe, apart from each other. Installed apps only accept what the key signs: with a new one (`pnpm tauri signer generate`, then its public key in `plugins.updater.pubkey`), they stop updating, and each user has to run the next installer by hand once.
 

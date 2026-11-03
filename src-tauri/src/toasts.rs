@@ -76,6 +76,7 @@ pub struct Toast {
 
 impl Toast {
     /// A toast about the monitor, not one session: its click shows the monitor.
+    #[cfg(any(windows, test))]
     pub fn is_summary(&self) -> bool {
         shows_monitor(&self.key)
     }
@@ -471,16 +472,19 @@ pub fn toast_id(key: &str) -> i32 {
 
 /// Toast tag: one toast per session in the Notification Center, a newer one
 /// replacing the older.
+#[cfg(any(windows, test))]
 pub fn toast_tag(key: &str) -> String {
     format!("{:08x}", toast_id(key))
 }
 
 /// Group of every toast of this app.
+#[cfg(windows)]
 pub const TOAST_GROUP: &str = "sessions";
 
 /// The toast's XML. With `link`, a click (on the banner or in the
 /// Notification Center) launches that URI; without it, it activates the app,
 /// which only hears it while running. Silent, like the plugin's toasts.
+#[cfg(any(windows, test))]
 pub fn toast_xml(toast: &Toast, link: Option<&str>) -> String {
     let activation = link
         .map(|link| format!(r#" launch="{}" activationType="protocol""#, xml_escape(link)))
@@ -494,6 +498,7 @@ pub fn toast_xml(toast: &Toast, link: Option<&str>) -> String {
 
 /// Escapes text for XML content or attributes, replacing characters XML 1.0
 /// does not allow with a space.
+#[cfg(any(windows, test))]
 fn xml_escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {

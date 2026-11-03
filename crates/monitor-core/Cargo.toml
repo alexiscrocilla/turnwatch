@@ -14,3 +14,8 @@ serde_json = "1.0.154"
 
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_System_ProcessStatus", "Win32_System_JobObjects", "Win32_Security"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2.191"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSRunningApplication", "NSWorkspace"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSLocale", "NSString"] }

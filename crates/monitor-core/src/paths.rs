@@ -25,9 +25,18 @@ pub fn projects_dir() -> PathBuf {
 }
 
 /// Claude Desktop's data folder: `%APPDATA%\Claude`.
+#[cfg(not(target_os = "macos"))]
 pub fn desktop_data_dir() -> PathBuf {
     let appdata = std::env::var_os("APPDATA").unwrap_or_default();
     PathBuf::from(appdata).join("Claude")
+}
+
+/// Claude Desktop's data folder: `~/Library/Application Support/Claude`.
+/// Its files are laid out as on Windows.
+#[cfg(target_os = "macos")]
+pub fn desktop_data_dir() -> PathBuf {
+    let home = std::env::var_os("HOME").unwrap_or_default();
+    PathBuf::from(home).join("Library/Application Support/Claude")
 }
 
 /// Desktop's per-session files: `%APPDATA%\Claude\claude-code-sessions`.

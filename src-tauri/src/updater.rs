@@ -4,6 +4,9 @@
 //! in `tauri.conf.json`. The installer then runs with `/S /UPDATE`: no window,
 //! no prompt, the old uninstaller stays out of it, and it starts the app again.
 //!
+//! On macOS the update is the app bundle itself, in a `.tar.gz`: the plugin
+//! replaces the bundle in place and the app restarts on its own.
+//!
 //! This is the app's only network call of its own. It all runs from Rust: the
 //! window's Content Security Policy stays closed, and its capabilities give it
 //! no access to the plugin.
@@ -40,8 +43,41 @@ pub fn available() -> bool {
 }
 
 /// The installer leaves its uninstaller beside the exe.
+#[cfg(not(target_os = "macos"))]
 fn installed(exe: &Path) -> bool {
     exe.with_file_name("uninstall.exe").is_file()
+}
+
+/// macOS: the bundle lies in an Applications folder, the system's or the
+/// user's. Run from the build folder, a disk image or a quarantine copy
+/// (App Translocation), it would replace itself where it stands.
+#[cfg(target_os = "macos")]
+fn installed(exe: &Path) -> bool {
+    let home = std::env::var_os("HOME").filter(|home| !home.is_empty());
+    in_applications(exe, home.as_deref().map(Path::new))
+}
+
+/// Whether `exe` is the executable of a bundle under `/Applications` or
+/// `<home>/Applications`.
+#[cfg(target_os = "macos")]
+fn in_applications(exe: &Path, home: Option<&Path>) -> bool {
+    let Some(bundle) = bundle_of(exe) else {
+        return false;
+    };
+    bundle.starts_with("/Applications")
+        || home.is_some_and(|home| bundle.starts_with(home.join("Applications")))
+}
+
+/// `X.app` for an executable at `X.app/Contents/MacOS/<name>`.
+#[cfg(target_os = "macos")]
+fn bundle_of(exe: &Path) -> Option<&Path> {
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let bundle = contents.parent()?;
+    let laid_out = macos.file_name()? == "MacOS"
+        && contents.file_name()? == "Contents"
+        && bundle.extension()? == "app";
+    laid_out.then_some(bundle)
 }
 
 /// Checks soon after the start, then every [`CHECK_EVERY`], while the setting
@@ -100,6 +136,12 @@ fn update(app: &AppHandle) -> Result<(), Error> {
         let installer = update.download(|_, _| {}, || {}).await?;
         show(app, announcement(app, &update.version));
         let refused = update.install(installer);
+        // macOS: the new bundle is in place, and the app must start it.
+        #[cfg(target_os = "macos")]
+        if refused.is_ok() {
+            before_exit(app);
+            app.restart();
+        }
         // Still here: Windows did not start the installer, the app goes on.
         take_stay_hidden(app);
         tray::set_visible(app, true);
@@ -154,6 +196,23 @@ fn show(app: &AppHandle, body: String) {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn only_a_bundle_in_an_applications_folder_is_installed() {
+        let home = Path::new("/Users/someone");
+        let at = |path: &str| in_applications(Path::new(path), Some(home));
+        assert!(at("/Applications/Turnwatch.app/Contents/MacOS/turnwatch"));
+        assert!(at("/Applications/Tools/Turnwatch.app/Contents/MacOS/turnwatch"));
+        assert!(at("/Users/someone/Applications/Turnwatch.app/Contents/MacOS/turnwatch"));
+        assert!(!at("/Users/someone/src/turnwatch/target/release/bundle/macos/Turnwatch.app/Contents/MacOS/turnwatch"));
+        assert!(!at("/Volumes/Turnwatch/Turnwatch.app/Contents/MacOS/turnwatch"));
+        assert!(!at("/private/var/folders/xy/T/AppTranslocation/0A1B/d/Turnwatch.app/Contents/MacOS/turnwatch"));
+        assert!(!at("/Applications/turnwatch"), "not a bundle");
+        assert!(!at("/Applications/Turnwatch.app/Contents/Resources/turnwatch"));
+        assert!(!in_applications(Path::new("/Users/someone/Applications/T.app/Contents/MacOS/t"), None));
+    }
+
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn only_an_exe_beside_its_uninstaller_is_installed() {
         let dir = std::env::temp_dir()

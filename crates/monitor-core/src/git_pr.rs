@@ -106,6 +106,10 @@ const LAYOUT_ARGS: &[&str] = &[
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// Where `gh` and `git` usually are on macOS, after the inherited PATH:
+/// Homebrew on Apple silicon, Homebrew on Intel, MacPorts.
+#[cfg(target_os = "macos")]
+const MACOS_TOOL_DIRS: [&str; 3] = ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"];
 
 /// Runs `git` and `gh` on a background thread and keeps the latest results.
 pub struct GitPrService {
@@ -1192,9 +1196,11 @@ fn run_process(
         // Keeps `git status` from taking index.lock under the sessions' feet.
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("NO_COLOR", "1");
+    #[cfg(target_os = "macos")]
+    command.env("PATH", search_path());
     if let Some(prefix) = path_prefix {
         let mut path = OsString::from(prefix.as_os_str());
-        if let Some(current) = std::env::var_os("PATH") {
+        if let Some(current) = inherited_path() {
             path.push(if cfg!(windows) { ";" } else { ":" });
             path.push(current);
         }
@@ -1207,6 +1213,12 @@ fn run_process(
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(CREATE_NO_WINDOW);
+    }
+    // Its own process group, which a timeout ends as a whole.
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
     }
     let mut child = command.spawn().map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => RunError::NotInstalled,
@@ -1242,6 +1254,67 @@ fn run_process(
         stdout: collect(stdout, tree.as_ref()),
         stderr: collect(stderr, tree.as_ref()),
     })
+}
+
+/// The PATH a program runs with, before any prefix.
+#[cfg(not(target_os = "macos"))]
+fn inherited_path() -> Option<OsString> {
+    std::env::var_os("PATH")
+}
+
+#[cfg(target_os = "macos")]
+fn inherited_path() -> Option<OsString> {
+    Some(search_path())
+}
+
+/// The PATH programs are looked up and run with on macOS: the app's own,
+/// then the folders a login shell adds. An app opened from the Finder only
+/// gets launchd's `/usr/bin:/bin:/usr/sbin:/sbin`, without `/etc/paths`,
+/// `/etc/paths.d` or Homebrew, where `gh` usually is. Worked out once.
+#[cfg(target_os = "macos")]
+fn search_path() -> OsString {
+    static PATH: std::sync::OnceLock<OsString> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        let mut lists = vec![PathBuf::from("/etc/paths")];
+        let mut drop_ins: Vec<PathBuf> = std::fs::read_dir("/etc/paths.d")
+            .map(|dir| dir.flatten().map(|entry| entry.path()).collect())
+            .unwrap_or_default();
+        drop_ins.sort();
+        lists.extend(drop_ins);
+        let mut extra: Vec<PathBuf> = lists
+            .iter()
+            .flat_map(|list| path_list(&std::fs::read_to_string(list).unwrap_or_default()))
+            .collect();
+        extra.extend(MACOS_TOOL_DIRS.iter().map(PathBuf::from));
+        extended_path(std::env::var_os("PATH"), extra)
+    })
+    .clone()
+}
+
+/// The folders of a `/etc/paths` file: one per line, blank lines skipped.
+#[cfg(target_os = "macos")]
+fn path_list(text: &str) -> Vec<PathBuf> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+/// `current` followed by the folders of `extra` it lacks, in order. Kept
+/// as it is when the result cannot be a PATH.
+#[cfg(target_os = "macos")]
+fn extended_path(current: Option<OsString>, extra: Vec<PathBuf>) -> OsString {
+    let mut dirs: Vec<PathBuf> = current
+        .as_deref()
+        .map(|path| std::env::split_paths(path).collect())
+        .unwrap_or_default();
+    for dir in extra {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    std::env::join_paths(dirs).unwrap_or_else(|_| current.unwrap_or_default())
 }
 
 /// Ends the child and everything it started.
@@ -1324,10 +1397,31 @@ impl Drop for ProcessTree {
     }
 }
 
-#[cfg(not(windows))]
+/// The process group a child leads (see [`run_process`]), so a timeout can
+/// end every process it started. A process that left the group (a daemon)
+/// is not reached. Pids are handed out in turn, so the group's id is not
+/// reused within the moments it is needed.
+#[cfg(target_os = "macos")]
+struct ProcessTree(libc::pid_t);
+
+#[cfg(target_os = "macos")]
+impl ProcessTree {
+    fn adopt(child: &Child) -> Option<Self> {
+        libc::pid_t::try_from(child.id()).ok().map(Self)
+    }
+
+    fn terminate(&self) {
+        // SAFETY: no pointer arguments; a group that is gone makes it fail.
+        unsafe {
+            libc::killpg(self.0, libc::SIGKILL);
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 struct ProcessTree;
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 impl ProcessTree {
     fn adopt(_child: &Child) -> Option<Self> {
         None
@@ -2561,6 +2655,77 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(3));
         thread::sleep(Duration::from_secs(4));
         assert!(!marker.exists(), "a grandchild survived the timeout");
+    }
+
+    /// A timeout ends the grandchildren too: here a subshell started by `sh`,
+    /// which writes a file about 2 s later unless it is ended.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn timeout_ends_the_whole_process_group() {
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = Cleanup(std::env::temp_dir().join(format!(
+            "monitor-core-group-{}-{nanos} é",
+            std::process::id()
+        )));
+        std::fs::create_dir_all(&dir.0).expect("create temp dir");
+        let cancel = AtomicBool::new(false);
+        let run = |name: &str, inner: u32, outer: u32, timeout: Duration| {
+            let marker = dir.0.join(format!("{name}.txt"));
+            // The marker's path goes in as an argument, never in the script.
+            let script = format!("(sleep {inner}; touch \"$0\") & sleep {outer}");
+            let marker_arg = marker.to_string_lossy().into_owned();
+            let result = run_process("sh", &["-c", &script, &marker_arg], None, &cancel, timeout, None);
+            (result, marker)
+        };
+
+        // Left alone, the grandchild writes its file: the script works here.
+        let (result, marker) = run("control", 1, 2, Duration::from_secs(15));
+        assert!(result.is_ok_and(|out| out.success));
+        assert!(marker.exists(), "the control script did not run");
+
+        let started = Instant::now();
+        let (result, marker) = run("timeout", 2, 6, Duration::from_millis(700));
+        assert_eq!(result, Err(RunError::TimedOut));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        thread::sleep(Duration::from_secs(3));
+        assert!(!marker.exists(), "a grandchild survived the timeout");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_path_gets_the_folders_a_login_shell_adds() {
+        assert_eq!(
+            path_list("/usr/local/bin\n\n  /usr/bin \r\n/bin"),
+            [Path::new("/usr/local/bin"), Path::new("/usr/bin"), Path::new("/bin")]
+        );
+        let extra = vec![
+            PathBuf::from("/usr/local/bin"),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/opt/homebrew/bin"),
+        ];
+        let finder = Some(OsString::from("/usr/bin:/bin:/usr/sbin:/sbin"));
+        assert_eq!(
+            extended_path(finder, extra.clone()),
+            "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin"
+        );
+        assert_eq!(extended_path(None, extra), "/usr/local/bin:/usr/bin:/opt/homebrew/bin");
+        // A folder with a colon cannot go in a PATH: the PATH stays as it was.
+        let odd = vec![PathBuf::from("/Volumes/a:b/bin")];
+        assert_eq!(extended_path(Some(OsString::from("/usr/bin")), odd), "/usr/bin");
+
+        let path = search_path();
+        for dir in MACOS_TOOL_DIRS {
+            assert!(std::env::split_paths(&path).any(|d| d == Path::new(dir)), "{dir}");
+        }
     }
 
     // -- worker, with a fake runner -----------------------------------------

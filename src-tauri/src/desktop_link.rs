@@ -10,6 +10,10 @@
 //! link is only used when a Desktop process already exists. The main window is
 //! then raised directly as well, since Windows may not let Desktop take the
 //! foreground on its own.
+//!
+//! On macOS (Desktop 4.4212) the same link switches Desktop's main pane to
+//! the session. Desktop is found by its bundle identifier, and brought
+//! forward as an app: macOS hands out apps here, not their windows.
 
 use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
@@ -66,15 +70,15 @@ pub fn open_session(
     before_link: impl FnOnce(),
 ) -> Result<bool, String> {
     let link = link_for(key)?;
-    let windows = win::desktop_windows();
+    let windows = platform::desktop_windows();
     if windows.is_empty() {
         return Err(desktop_closed());
     }
 
     before_link();
-    win::allow_any_foreground();
+    platform::allow_any_foreground();
     let linked = app.opener().open_url(link, None::<&str>).is_ok();
-    let focused = win::focus_main(&windows);
+    let focused = platform::focus_main(&windows);
     outcome(linked, focused)
 }
 
@@ -95,6 +99,13 @@ fn outcome(linked: bool, focused: bool) -> Result<bool, String> {
         Err(not_shown())
     }
 }
+
+#[cfg(windows)]
+use win as platform;
+#[cfg(target_os = "macos")]
+use mac as platform;
+#[cfg(not(any(windows, target_os = "macos")))]
+use other as platform;
 
 #[cfg(windows)]
 mod win {
@@ -225,8 +236,41 @@ mod win {
     }
 }
 
-#[cfg(not(windows))]
-mod win {
+#[cfg(target_os = "macos")]
+mod mac {
+    use monitor_core::engine::DESKTOP_BUNDLE_ID;
+    use objc2::rc::Retained;
+    use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+    use objc2_foundation::NSString;
+
+    /// A running Claude Desktop app.
+    pub struct DesktopWindow(Retained<NSRunningApplication>);
+
+    /// The Claude Desktop apps running (one, normally). Empty when Desktop is
+    /// not running. Its CLI processes have another bundle identifier.
+    pub fn desktop_windows() -> Vec<DesktopWindow> {
+        let id = NSString::from_str(DESKTOP_BUNDLE_ID);
+        NSRunningApplication::runningApplicationsWithBundleIdentifier(&id)
+            .iter()
+            .filter(|app| !app.isTerminated())
+            .map(DesktopWindow)
+            .collect()
+    }
+
+    /// Brings Desktop forward with its windows. False when macOS refused.
+    pub fn focus_main(windows: &[DesktopWindow]) -> bool {
+        windows.first().is_some_and(|app| {
+            app.0
+                .activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows)
+        })
+    }
+
+    /// macOS lets the app that handles the link come forward on its own.
+    pub fn allow_any_foreground() {}
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+mod other {
     pub struct DesktopWindow;
 
     pub fn desktop_windows() -> Vec<DesktopWindow> {
@@ -301,6 +345,14 @@ mod tests {
         assert!(!win::is_desktop_image(OsStr::new(
             r"C:\Program Files\WindowsApps\Claude_3.1623.4.0_x64__pzs8sxrjxfjjc\app\chrome-native-host.exe"
         )));
+    }
+
+    /// Read-only: looks Desktop up among the running apps.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "needs a running Claude Desktop"]
+    fn live_finds_running_desktop_on_macos() {
+        assert_eq!(mac::desktop_windows().len(), 1, "no running Claude Desktop, or several");
     }
 
     /// Read-only: enumerates windows and queries process paths.

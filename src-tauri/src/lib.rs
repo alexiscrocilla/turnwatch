@@ -1,11 +1,17 @@
 //! Tauri shell of Turnwatch: wires the monitor-core engine to the
 //! window, the tray icon and Windows toasts.
+//!
+//! On macOS the tray icon is in the menu bar, and the app has no Dock icon
+//! (`LSUIElement` in `Info.plist`): a window can only show over another
+//! app's full-screen Space when its app is such an agent.
 
+#[cfg(not(target_os = "macos"))]
 mod app_identity;
 mod autostart;
 pub mod companion_install;
 mod desktop_link;
 mod quota_alerts;
+#[cfg(not(target_os = "macos"))]
 mod registry;
 mod settings_store;
 mod toasts;
@@ -91,7 +97,7 @@ pub fn run() {
     if cfg!(debug_assertions) {
         use_dev_identity(context.config_mut());
     }
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             show_main_window(app);
         }))
@@ -136,15 +142,24 @@ pub fn run() {
             quit_app
         ])
         .build(context)
-        .expect("error while building tauri application")
-        .run(|app, event| {
-            // Logoff, shutdown or Quitter: the process may end before the
-            // engine's worker writes its latest acks, and the window's size
-            // is saved nowhere else.
-            if let RunEvent::Exit = event {
-                save_state(app);
-            }
-        });
+        .expect("error while building tauri application");
+    // An agent from the start, as `Info.plist` says (`tauri dev` runs the bare
+    // executable, without it): the event loop would otherwise make the app a
+    // regular one as it starts, and switching back later hides the window.
+    #[cfg(target_os = "macos")]
+    let app = {
+        let mut app = app;
+        app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+        app
+    };
+    app.run(|app, event| {
+        // Logoff, shutdown or Quitter: the process may end before the
+        // engine's worker writes its latest acks, and the window's size
+        // is saved nowhere else.
+        if let RunEvent::Exit = event {
+            save_state(app);
+        }
+    });
 }
 
 /// Debug builds get their own identity: single-instance lock, settings and
@@ -193,7 +208,7 @@ fn setup(app: &AppHandle) -> tauri::Result<()> {
     )?;
 
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
-        let _ = window.set_always_on_top(settings.always_on_top);
+        set_on_top(&window, settings.always_on_top);
         if let Some(size) = saved_size {
             let _ = window.set_size(LogicalSize::new(size.width, size.expanded_height));
         }
@@ -209,7 +224,10 @@ fn setup(app: &AppHandle) -> tauri::Result<()> {
     app.manage(ToastTargets::default());
     #[cfg(windows)]
     app.manage(LiveToasts::default());
+    #[cfg(not(target_os = "macos"))]
     app.manage(app_identity::ToastIdentity(app_identity::register(app)));
+    #[cfg(target_os = "macos")]
+    install_companion(app);
 
     // The window starts visible (`tauri.conf.json`). Assuming so is the safe
     // side: a wrong "hidden" would freeze the list.
@@ -530,9 +548,71 @@ fn user_idle_ms() -> Option<i64> {
     Some(i64::from(unsafe { GetTickCount() }.wrapping_sub(info.dwTime)))
 }
 
-#[cfg(not(windows))]
+/// Time since the last keyboard or mouse input in this login session.
+#[cfg(target_os = "macos")]
+fn user_idle_ms() -> Option<i64> {
+    /// `kCGEventSourceStateCombinedSessionState`.
+    const COMBINED_SESSION_STATE: i32 = 0;
+    /// `kCGAnyInputEventType`.
+    const ANY_INPUT_EVENT: u32 = u32::MAX;
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGEventSourceSecondsSinceLastEventType(state: i32, event_type: u32) -> f64;
+    }
+
+    // SAFETY: takes two integers and only reads the session's input state.
+    let seconds =
+        unsafe { CGEventSourceSecondsSinceLastEventType(COMBINED_SESSION_STATE, ANY_INPUT_EVENT) };
+    (seconds.is_finite() && seconds >= 0.0).then_some((seconds * 1000.0) as i64)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn user_idle_ms() -> Option<i64> {
     None
+}
+
+/// macOS has no installer: adds the companion mod at each start, on a worker
+/// thread, unless it is already there (see `companion_install`), and says so
+/// when it could not. Debug builds leave Claude Code's configuration alone.
+#[cfg(target_os = "macos")]
+fn install_companion(app: &AppHandle) {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let (Ok(resources), Ok(data)) = (app.path().resource_dir(), app.path().app_local_data_dir())
+    else {
+        return;
+    };
+    let handle = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("companion".into())
+        .spawn(move || {
+            let Err(reason) = companion_install::install_at_launch(&resources, &data) else {
+                return;
+            };
+            let lang = i18n::current();
+            show_toast(
+                &handle,
+                &toasts::Toast {
+                    key: format!("{}companion", toasts::MONITOR_PREFIX),
+                    title: lang.pick("Companion mod", "Mod compagnon").to_owned(),
+                    body: lang.pick(
+                        format!(
+                            "The companion mod could not be added to Claude Desktop. The monitor works \
+                             without it, with a less precise quota. Open Claude Desktop's Code tab once, \
+                             then start Turnwatch again. {reason}"
+                        ),
+                        format!(
+                            "Le mod compagnon n'a pas pu être ajouté à Claude Desktop. Le moniteur \
+                             fonctionne sans lui, avec un quota moins précis. Ouvre une fois l'onglet \
+                             Code de Claude Desktop, puis relance Turnwatch. {reason}"
+                        ),
+                    ),
+                },
+            );
+        });
+    // Without it, the monitor still reads Desktop's quota samples.
+    drop(spawned);
 }
 
 /// Saves the engine's acks right away.
@@ -567,7 +647,7 @@ fn update_settings(
     shell.engine.set_settings(new.clone());
 
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
-        let _ = window.set_always_on_top(new.always_on_top);
+        set_on_top(&window, new.always_on_top);
         if new.compact != old.compact {
             apply_compact(&shell, &window, new.compact);
         }
@@ -863,20 +943,23 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
     }
 }
 
-/// Turns the start with Windows on or off, then shows what the registry
-/// says (the menu has already flipped its check mark on its own).
+/// Turns the start with Windows (the opening at login on macOS) on or off,
+/// then shows what the registry or the launch agent says (the menu has
+/// already flipped its check mark on its own).
 fn set_autostart(app: &AppHandle, wanted: bool) {
     if let Err(error) = autostart::set(app, wanted) {
         let lang = i18n::current();
-        let (en, fr) = if wanted { ("turn on", "activer") } else { ("turn off", "désactiver") };
+        let (en, fr) = if wanted { ("turn on", "d'activer") } else { ("turn off", "de désactiver") };
+        let (title_en, title_fr) = autostart::TITLE;
+        let (what_en, what_fr) = autostart::WHAT;
         show_toast(
             app,
             &toasts::Toast {
                 key: format!("{}autostart", toasts::MONITOR_PREFIX),
-                title: lang.pick("Start with Windows", "Démarrage avec Windows").to_owned(),
+                title: lang.pick(title_en, title_fr).to_owned(),
                 body: lang.pick(
-                    format!("Could not {en} starting with Windows: {error}"),
-                    format!("Impossible de {fr} le lancement au démarrage : {error}"),
+                    format!("Could not {en} {what_en}: {error}"),
+                    format!("Impossible {fr} {what_fr} : {error}"),
                 ),
             },
         );
@@ -901,6 +984,38 @@ fn menu_toggle(id: &str) -> Option<fn(&mut Settings)> {
         _ => return None,
     };
     Some(toggle)
+}
+
+/// Keeps the window above the others, or not. On macOS it then also shows on
+/// every Space, a full-screen app's included: macOS keeps a window out of
+/// another app's full-screen Space unless it may join it.
+fn set_on_top(window: &WebviewWindow, on_top: bool) {
+    let _ = window.set_always_on_top(on_top);
+    #[cfg(target_os = "macos")]
+    join_all_spaces(window, on_top);
+}
+
+#[cfg(target_os = "macos")]
+fn join_all_spaces(window: &WebviewWindow, join: bool) {
+    use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
+
+    let Ok(ns_window) = window.ns_window() else {
+        return;
+    };
+    // A raw pointer is not Send; the window outlives the app's run loop.
+    let ns_window = ns_window as usize;
+    let _ = window.run_on_main_thread(move || {
+        // SAFETY: Tauri's NSWindow, which is never closed (closing hides it),
+        // used on the main thread as AppKit requires.
+        let ns_window = unsafe { &*(ns_window as *const NSWindow) };
+        let spaces = NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::FullScreenAuxiliary;
+        let current = ns_window.collectionBehavior();
+        let wanted = if join { current | spaces } else { current & !spaces };
+        if wanted != current {
+            ns_window.setCollectionBehavior(wanted);
+        }
+    });
 }
 
 /// What the next start needs, saved before the process ends.
@@ -1029,8 +1144,8 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(windows)]
-    #[ignore = "needs an interactive Windows session"]
+    #[cfg(any(windows, target_os = "macos"))]
+    #[ignore = "needs an interactive session"]
     fn live_reads_the_idle_time() {
         let idle = user_idle_ms().expect("idle time");
         assert!((0..i64::from(u32::MAX)).contains(&idle), "{idle}");
@@ -1237,6 +1352,7 @@ mod tests {
             Some("Turnwatch (dev)")
         );
         assert_eq!(config.app.windows[0].title, "Turnwatch (dev)");
+        #[cfg(not(target_os = "macos"))]
         assert!(app_identity::is_valid_app_id(&config.identifier));
     }
 }

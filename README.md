@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/github/license/alexiscrocilla/turnwatch)](LICENSE)
 
-A small always-on-top Windows window that shows, live, the state of the Claude Code sessions started from the Code tab of Claude Desktop. The idea: minimize Claude Desktop and keep on screen only what matters, which is the session waiting for you, or else a short summary.
+A small always-on-top window, on Windows and macOS, that shows, live, the state of the Claude Code sessions started from the Code tab of Claude Desktop. The idea: minimize Claude Desktop and keep on screen only what matters, which is the session waiting for you, or else a short summary.
 
 <p align="center">
   <img src="docs/preview.png" alt="The monitor's window: sessions grouped by project, each with a pixel crab showing its state, under the plan's quota gauges" width="380">
@@ -21,16 +21,16 @@ Claude Desktop already notifies about finished turns, so the monitor only sends 
 
 It also warns when the plan's quota crosses a threshold: the 5-hour window at 80% then 95%, the week and Fable's weekly share at 90%, with the time left before the reset ("5-hour quota at 82%", "Resets in 1 h 20"). Each threshold is announced once per window, and a threshold already passed when the monitor starts is not announced. These alerts rely on Claude Desktop sampling the quota, which it only does for a few hours after a right-click on its icon (see **Quota** below). A notification therefore tells you when it has stopped: a session is working, you are at the computer, and there has been no sample for 20 minutes ("Quota: sampling stopped"). A pause of more than 10 minutes without touching the keyboard or mouse restarts that count, because Desktop also skips its samples while the computer is idle or locked. It is sent once per stop, and the "Notify the quota" setting turns it off too. With the companion mod (see **Companion mod**), sessions report the quota themselves: this notification has no reason to exist and is not sent.
 
-The window, the tray menu, the notifications and the installer are in English and French. They follow Windows' display language, and the tray menu lets you choose (see **Usage**).
+The window, the tray menu, the notifications and the installer are in English and French. They follow the system's display language, and the tray menu lets you choose (see **Usage**).
 
 ## Requirements
 
-- Windows 10 or 11, with the WebView2 runtime (already there on Windows 11).
+- Windows 10 or 11, with the WebView2 runtime (already there on Windows 11), or macOS 13 or later (see **macOS**).
 - Claude Desktop with the Code tab. Tested with Claude Desktop 4.4212 and Claude Code 2.1.309.
 - `git` on the PATH for branches and uncommitted files.
 - `gh` logged in (`gh auth login`) for PR status. Without `gh`, everything else works.
 
-To build: stable Rust (MSVC), the Visual Studio Build Tools, Node.js and pnpm.
+To build: stable Rust (MSVC), the Visual Studio Build Tools, Node.js and pnpm. On macOS: stable Rust, the Xcode command line tools, Node.js and pnpm.
 
 ## Install
 
@@ -50,6 +50,26 @@ The **Update automatically** item of the tray menu turns the checks off, and **C
 
 Version 0.1.0 predates all this: to leave it, run the new installer by hand once. To update by hand at any time, run the installer of the new version. It first goes through the uninstaller of the old one: leave "Delete the application data" unticked there. Settings, sessions already seen and "Start with Windows" are then kept.
 
+## macOS
+
+Everything above works the same way on a Mac, with these differences:
+
+- **Install**: open `Turnwatch_<version>_aarch64.dmg` from the [Releases](https://github.com/alexiscrocilla/turnwatch/releases) page and drag Turnwatch into Applications. The app is not signed by Apple: the first time, macOS refuses to open it. Open it once, then in System Settings > Privacy & Security choose "Open Anyway". The build is for Apple silicon.
+- **Menu bar**: the icon sits in the menu bar, and the app has no Dock icon. A click on the icon shows or hides the window, its menu holds the settings. With **Always on top**, the window also follows you to every Space, a full-screen app's included.
+- **Companion mod**: there is no installer, so the app adds the mod itself each time it starts, with the most recent CLI in `~/Library/Application Support/Claude/claude-code/<version>/<hash>/claude.app`. It first copies the marketplace out of the app, into `~/Library/Application Support/local.turnwatch/companion/`, so that moving the app does not break it. When it is already there and up to date, it only checks. If Claude Desktop has never opened its Code tab, a notification says so; opening the tab once, then starting Turnwatch again, makes up for it. To remove it, run this before deleting the app:
+
+  ```bash
+  /Applications/Turnwatch.app/Contents/MacOS/turnwatch --uninstall-companion
+  ```
+
+- **Open at login** replaces "Start with Windows": a launch agent, `~/Library/LaunchAgents/local.turnwatch.plist`, which runs the app's executable. macOS lists it in System Settings > General > Login Items. Switching it off there keeps the file, so the menu item stays ticked; untick it in Turnwatch's menu instead. It is refused while the app runs from where it was downloaded: move it to Applications first.
+- **Updates**: only an app in `/Applications` or `~/Applications` updates itself. The update replaces the app in place, then restarts it.
+- **`gh` and `git`**: an app opened from the Finder does not get the PATH of your shell. The monitor adds the folders of `/etc/paths` and `/etc/paths.d`, then `/opt/homebrew/bin`, `/usr/local/bin` and `/opt/local/bin`, so a `gh` from Homebrew or MacPorts is found.
+- **Notifications**: they go through macOS' Notification Center, under Turnwatch's name. As on Windows, a click opens the session, or shows the window for a notification about several sessions, as long as the app runs.
+- **Quota**: Claude Desktop samples it when it opens. Without the companion mod, quitting and reopening Desktop takes a new sample.
+- **Files**: Desktop's files are in `~/Library/Application Support/Claude/` instead of `%APPDATA%\Claude\`, laid out the same way, and the app's own in `~/Library/Application Support/local.turnwatch/`. `~/.claude` is the same. The registry's `procStart` is a date in UTC to the second (`Tue Nov  3 21:34:47 2026`), checked against the start time macOS gives for the pid.
+- **Language**: "auto" follows the first of the languages listed in System Settings > General > Language & Region.
+
 ## Build and run
 
 ```bash
@@ -65,6 +85,8 @@ pnpm tauri build
 ```
 
 The installer is then in `src-tauri\target\release\bundle\nsis\`, and the executable is `src-tauri\target\release\turnwatch.exe`. The executable runs as is, with no installation, but without the mod or updates. `pnpm tauri build --no-bundle` produces only the executable.
+
+On macOS, the app is in `src-tauri/target/release/bundle/macos/Turnwatch.app` and the disk image in `src-tauri/target/release/bundle/dmg/`. The app adds the mod when it starts, wherever it runs from, but only updates itself from an Applications folder.
 
 For development, with live reload of the interface:
 
@@ -208,7 +230,7 @@ crates/monitor-core/   Logic, with no dependency on Tauri
 src-tauri/             Window, icon, notifications, commands
   installer-hooks.nsh  What the installer does beyond copying the app
   src/updater.rs       Updates from the GitHub releases
-  src/companion_install.rs  Adding and removing the mod, called by the installer
+  src/companion_install.rs  Adding and removing the mod, called by the installer (at start on macOS)
 src/                   Interface (TypeScript with no framework)
   i18n.ts              English and French text of the window
 mod/                   Local marketplace copied with the app
@@ -224,7 +246,7 @@ scripts/               Checks before a push, and the release
 pnpm check
 ```
 
-This builds the interface, runs clippy and runs the tests of both crates. The mod has its own tests, which need a recent `claude`: use the one in `%APPDATA%\Claude\claude-code\<version>\<hash>\`.
+This builds the interface, runs clippy and runs the tests of both crates. The mod has its own tests, which need a recent `claude`: use the one in `%APPDATA%\Claude\claude-code\<version>\<hash>\` (on macOS, `~/Library/Application Support/Claude/claude-code/<version>/<hash>/claude.app/Contents/MacOS/claude`).
 
 ```bash
 claude plugin test mod/turnwatch-companion

@@ -1,7 +1,8 @@
 import type { AgentInfo, SessionMeasureInput } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 
-const FOLDER = 'C:/Users/me/.claude/session-monitor'
+// Paths are compared from `.claude` on (see `key`).
+const FOLDER = '~/.claude/session-monitor'
 
 const agent = (id: string, status: AgentInfo['status']): AgentInfo => ({
   id,
@@ -22,17 +23,19 @@ function engine(on: Parameters<Parameters<typeof test>[1]>[1], failing = false):
   on('clock.now', () => ({ value: 1_000 }))
   on('session.id', () => ({ value: 'session-1' }))
   on('agent.list', () => ({ value: below.agents }))
-  on('fs.exists', (_, e) => ({ value: below.files.has(slashes(e.path)) }))
+  on('fs.exists', (_, e) => ({ value: below.files.has(key(e.path)) }))
   on('fs.write', (_, e) => {
     if (failing) throw new Error('disk full')
-    below.files.set(slashes(e.path), e.text)
+    below.files.set(key(e.path), e.text)
     return { value: undefined }
   })
   return below
 }
 
-// The engine puts paths back in the system's format.
-const slashes = (path: string) => path.replaceAll('\\', '/')
+// The engine puts paths back in the system's format: on macOS, where
+// `C:/Users/me` is not absolute, it even resolves it against the current folder.
+// So a path is kept from its `/.claude/` on, with `~` before it.
+const key = (path: string) => path.replaceAll('\\', '/').replace(/^.*(?=\/\.claude\/)/, '~')
 
 const measure = (patch: Partial<SessionMeasureInput>) =>
   ({

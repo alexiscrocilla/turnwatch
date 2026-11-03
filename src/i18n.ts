@@ -8,6 +8,9 @@ import { CMD } from "./types";
 
 export type Lang = "en" | "fr";
 
+/** Running on macOS, where some text names other places than on Windows. */
+const MAC = navigator.userAgent.includes("Macintosh");
+
 export const isLang = (v: unknown): v is Lang => v === "en" || v === "fr";
 
 /** The language for a BCP 47 tag: "fr*" is French, everything else English. */
@@ -48,7 +51,7 @@ const en = {
   pinLabel: "Always on top",
   pinOn: "Always on top (on)",
   pinOff: "Always on top (off)",
-  hideTitle: "Hide (stays in the notification area)",
+  hideTitle: MAC ? "Hide (stays in the menu bar)" : "Hide (stays in the notification area)",
   hideLabel: "Hide the window",
   expandTitle: "Expand",
   expandLabel: "Show the session list",
@@ -178,9 +181,13 @@ const en = {
   resetUnknown: "Reset time unknown",
   timeElapsed: (n: number, week: boolean) =>
     `Time elapsed: ${n}% of the ${week ? "week" : "window"} (tinted band behind the bar)`,
-  quotaStale: (since: string) => `No sample since ${since}: right-click Claude Desktop's icon to restart it`,
-  quotaResumeHint:
-    "Claude Desktop only samples the quota when it opens and for 5 h after a right-click on its icon in the notification area. A right-click on that icon restarts sampling.",
+  quotaStale: (since: string) =>
+    MAC
+      ? `No sample since ${since}: reopen Claude Desktop to take one`
+      : `No sample since ${since}: right-click Claude Desktop's icon to restart it`,
+  quotaResumeHint: MAC
+    ? "Claude Desktop samples the quota when it opens. Quitting and reopening it takes a new sample."
+    : "Claude Desktop only samples the quota when it opens and for 5 h after a right-click on its icon in the notification area. A right-click on that icon restarts sampling.",
 
   // Nested sessions and folded rows
   nestedSessions: (n: number) => `${n} nested ${pluralEn(n, "session", "sessions")}`,
@@ -315,7 +322,7 @@ const fr: typeof en = {
   pinLabel: "Toujours au premier plan",
   pinOn: "Toujours au premier plan (activé)",
   pinOff: "Toujours au premier plan (désactivé)",
-  hideTitle: "Masquer (reste dans la zone de notification)",
+  hideTitle: MAC ? "Masquer (reste dans la barre des menus)" : "Masquer (reste dans la zone de notification)",
   hideLabel: "Masquer la fenêtre",
   expandTitle: "Agrandir",
   expandLabel: "Afficher la liste des sessions",
@@ -440,9 +447,13 @@ const fr: typeof en = {
   resetUnknown: "Heure de réinitialisation inconnue",
   timeElapsed: (n, week) =>
     `Temps écoulé : ${n} % ${week ? "de la semaine" : "de la fenêtre"} (zone teintée derrière la barre)`,
-  quotaStale: (since) => `Pas de relevé depuis ${since} : clic droit sur l'icône de Claude Desktop pour le relancer`,
-  quotaResumeHint:
-    "Claude Desktop ne relève le quota qu'à son ouverture et pendant les 5 h qui suivent un clic droit sur son icône, dans la zone de notification. Un clic droit sur cette icône relance le relevé.",
+  quotaStale: (since) =>
+    MAC
+      ? `Pas de relevé depuis ${since} : rouvre Claude Desktop pour en prendre un`
+      : `Pas de relevé depuis ${since} : clic droit sur l'icône de Claude Desktop pour le relancer`,
+  quotaResumeHint: MAC
+    ? "Claude Desktop relève le quota à son ouverture. Le quitter puis le rouvrir prend un nouveau relevé."
+    : "Claude Desktop ne relève le quota qu'à son ouverture et pendant les 5 h qui suivent un clic droit sur son icône, dans la zone de notification. Un clic droit sur cette icône relance le relevé.",
 
   // Nested sessions and folded rows
   nestedSessions: (n) => `${n} ${pluralFr(n, "session imbriquée", "sessions imbriquées")}`,

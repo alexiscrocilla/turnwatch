@@ -11,7 +11,7 @@ use crate::model::{
     ProposedTask, RegistryEntry, RunningAgent, SessionRef, SessionState, SessionView, Settings, Snapshot,
     SourceHealth, TaskSuggestion, ToolActivity, TranscriptInfo, Transition, TurnOrigin,
 };
-use crate::registry::start_as_filetime;
+use crate::registry::{lstart_as_unix_secs, start_as_filetime};
 use crate::transcript::plain_text;
 
 /// Everything the engine read from the sources, ready to be joined.
@@ -779,9 +779,10 @@ pub fn entry_rank(entry: &RegistryEntry, desktop: &HashMap<String, DesktopSessio
 /// Sort key of a process launch: start time (`startedAt`, else `procStart`),
 /// then pid. Unknown start times sort first.
 fn launch_order(entry: &RegistryEntry) -> (Option<i64>, u32) {
-    let started = entry
-        .started_at
-        .or_else(|| entry.proc_start.as_deref().and_then(filetime_to_unix_ms));
+    let started = entry.started_at.or_else(|| {
+        let raw = entry.proc_start.as_deref()?;
+        filetime_to_unix_ms(raw).or_else(|| lstart_as_unix_secs(raw)?.checked_mul(1_000))
+    });
     (started, entry.pid)
 }
 

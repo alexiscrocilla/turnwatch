@@ -2,8 +2,9 @@
 //! menu, source errors and the labels of Desktop's buttons. What sessions
 //! write stays in the language it was written in.
 //!
-//! The `language` setting says "en", "fr", or anything else to follow Windows'
-//! display language: French if it is French, else English. The language in
+//! The `language` setting says "en", "fr", or anything else to follow the
+//! system's display language (Windows', or the first of macOS' preferred
+//! languages): French if it is French, else English. The language in
 //! use is global, as code deep in the engine needs it: the shell sets it, the
 //! rest reads it, and the window gets it in [`Snapshot::lang`]. Text already
 //! read from a transcript keeps its language until the transcript changes.
@@ -81,7 +82,25 @@ fn system_lang() -> Lang {
     }
 }
 
-#[cfg(not(windows))]
+/// The first of the languages macOS lists for the user, when it is one the
+/// monitor speaks.
+#[cfg(target_os = "macos")]
+fn system_lang() -> Lang {
+    use objc2_foundation::NSLocale;
+
+    // Language codes such as "fr-FR" or "fr", the user's preferred first.
+    let first = NSLocale::preferredLanguages()
+        .firstObject()
+        .map(|language| language.to_string())
+        .unwrap_or_default();
+    if first == "fr" || first.starts_with("fr-") {
+        Lang::Fr
+    } else {
+        Lang::En
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn system_lang() -> Lang {
     Lang::En
 }

@@ -22,9 +22,27 @@ const TICKS_SCALE_MIN: u64 = 300_000_000_000_000_000;
 /// .NET ticks at 1601-01-01, the FILETIME epoch.
 const TICKS_AT_FILETIME_EPOCH: u64 = 504_911_232_000_000_000;
 /// Fifteen minutes in 100 ns units: every UTC offset is a multiple of it.
+#[cfg(any(windows, test))]
 const QUARTER_HOUR: u64 = 9_000_000_000;
 /// Largest UTC offset (14 h), in 100 ns units.
+#[cfg(any(windows, test))]
 const MAX_UTC_OFFSET: u64 = 56 * QUARTER_HOUR;
+
+/// Largest accepted gap, in seconds, between the registry's `procStart` on
+/// macOS and the start time macOS reports for the pid. Both count whole
+/// seconds, so on this machine they were equal for every live session.
+#[cfg(target_os = "macos")]
+const LSTART_TOLERANCE_SECS: u64 = 1;
+/// Fifteen minutes in seconds.
+#[cfg(target_os = "macos")]
+const QUARTER_HOUR_SECS: u64 = 15 * 60;
+/// Largest UTC offset (14 h), in seconds.
+#[cfg(target_os = "macos")]
+const MAX_UTC_OFFSET_SECS: u64 = 56 * QUARTER_HOUR_SECS;
+/// Month names as `ps -o lstart` writes them in the C locale.
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 /// Parses one registry file. None when the JSON is not a session entry.
 pub fn parse_entry(json: &str) -> Option<RegistryEntry> {
@@ -121,15 +139,16 @@ fn entries_of_file(previous: &[RegistryEntry], file_name: &std::ffi::OsStr) -> V
 }
 
 /// True when `pid` is running and, when `proc_start` is given, its creation
-/// time (Windows FILETIME or .NET ticks, decimal) matches, which rules out a
-/// reused pid.
+/// time matches, which rules out a reused pid. On Windows `proc_start` is a
+/// FILETIME or .NET ticks, in decimal; on macOS it is `ps -o lstart` text in
+/// UTC ([`lstart_as_unix_secs`]).
 ///
 /// Claude Code runs under the user's own account, so its processes can always
 /// be opened and their creation time read. When `proc_start` is known, a
 /// process that cannot be opened (access denied) or whose creation time
 /// cannot be read therefore belongs to someone else: the pid was reused.
-/// Without `proc_start` (or with one that is not a decimal number) such a
-/// process counts as alive. Outside Windows, always true.
+/// Without `proc_start` (or with one in another format) such a process
+/// counts as alive. Outside Windows and macOS, always true.
 pub fn is_alive(pid: u32, proc_start: Option<&str>) -> bool {
     #[cfg(windows)]
     {
@@ -144,7 +163,20 @@ pub fn is_alive(pid: u32, proc_start: Option<&str>) -> bool {
             } => expected.is_none_or(|expected| start_matches(expected, created)),
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let expected = proc_start.and_then(lstart_as_unix_secs);
+        match mac::probe(pid) {
+            mac::Probe::Gone | mac::Probe::Exited => false,
+            mac::Probe::Inaccessible | mac::Probe::Running { started: None } => {
+                expected.is_none()
+            }
+            mac::Probe::Running {
+                started: Some(started),
+            } => expected.is_none_or(|expected| lstart_matches(expected, started)),
+        }
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (pid, proc_start);
         true
@@ -182,6 +214,7 @@ pub(crate) fn is_registry_file_name(name: &std::ffi::OsStr) -> bool {
         && stem.bytes().all(|b| b.is_ascii_digit())
 }
 
+#[cfg(any(windows, test))]
 fn parse_filetime(s: &str) -> Option<u64> {
     s.trim().parse::<u64>().ok()
 }
@@ -201,6 +234,7 @@ pub(crate) fn start_as_filetime(start: u64) -> Option<u64> {
 /// reports. A FILETIME must match within [`PROC_START_TOLERANCE`]. .NET ticks
 /// are local time, so they may differ from it by a whole number of quarter
 /// hours (the UTC offset), within the same tolerance.
+#[cfg(any(windows, test))]
 fn start_matches(expected: u64, created: u64) -> bool {
     if expected <= TICKS_SCALE_MIN {
         return created.abs_diff(expected) <= PROC_START_TOLERANCE;
@@ -214,6 +248,55 @@ fn start_matches(expected: u64, created: u64) -> bool {
     }
     let rest = diff % QUARTER_HOUR;
     rest <= PROC_START_TOLERANCE || QUARTER_HOUR - rest <= PROC_START_TOLERANCE
+}
+
+/// `procStart` as the CLI writes it on macOS, `ps -o lstart` text in UTC such
+/// as `Tue Nov  3 21:34:47 2026`, in seconds since the Unix epoch. None for
+/// any other text. The weekday is not checked.
+pub(crate) fn lstart_as_unix_secs(text: &str) -> Option<i64> {
+    let parts: Vec<&str> = text.split_whitespace().collect();
+    let [_weekday, month, day, time, year] = parts[..] else {
+        return None;
+    };
+    let month = MONTHS.iter().position(|name| *name == month)? as i64 + 1;
+    let day: i64 = day.parse().ok().filter(|day| (1..=31).contains(day))?;
+    let year: i64 = year.parse().ok().filter(|year| (1970..=9999).contains(year))?;
+    let mut clock = time.split(':').map(|part| part.parse::<i64>().ok());
+    let (Some(Some(hours)), Some(Some(minutes)), Some(Some(seconds)), None) =
+        (clock.next(), clock.next(), clock.next(), clock.next())
+    else {
+        return None;
+    };
+    if !(0..24).contains(&hours) || !(0..60).contains(&minutes) || !(0..=60).contains(&seconds) {
+        return None;
+    }
+    Some(days_from_civil(year, month, day) * 86_400 + hours * 3_600 + minutes * 60 + seconds)
+}
+
+/// Days from 1970-01-01 to a date of the proleptic Gregorian calendar
+/// (Howard Hinnant's `days_from_civil`).
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    // Months counted from March, so that February ends the year.
+    let day_of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+/// True when a registry start value read as UTC ([`lstart_as_unix_secs`])
+/// matches the start time macOS reports, in Unix seconds. Within
+/// [`LSTART_TOLERANCE_SECS`], or a whole number of quarter hours off: a
+/// build of the CLI writing local time would be off by the UTC offset.
+#[cfg(target_os = "macos")]
+fn lstart_matches(expected: i64, started: i64) -> bool {
+    let diff = expected.abs_diff(started);
+    if diff > MAX_UTC_OFFSET_SECS + LSTART_TOLERANCE_SECS {
+        return false;
+    }
+    let rest = diff % QUARTER_HOUR_SECS;
+    rest <= LSTART_TOLERANCE_SECS || QUARTER_HOUR_SECS - rest <= LSTART_TOLERANCE_SECS
 }
 
 /// Non-blank string field.
@@ -335,6 +418,57 @@ mod win {
             (u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime)
         });
         Probe::Running { created }
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod mac {
+    /// What macOS says about a pid.
+    pub(super) enum Probe {
+        /// Running; start time in Unix seconds when readable.
+        Running { started: Option<i64> },
+        /// Ended, but not yet reaped by its parent.
+        Exited,
+        /// No such process.
+        Gone,
+        /// The process exists but cannot be queried.
+        Inaccessible,
+    }
+
+    /// `SZOMB` in `<sys/proc.h>`: a process that has ended.
+    const SZOMB: u32 = 5;
+
+    pub(super) fn probe(pid: u32) -> Probe {
+        let Ok(pid) = libc::pid_t::try_from(pid) else {
+            return Probe::Gone;
+        };
+        let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+        let size = size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        // SAFETY: `info` is a writable buffer of `size` bytes for the
+        // duration of the call.
+        let written = unsafe {
+            libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, info.as_mut_ptr().cast(), size)
+        };
+        if written == size {
+            // SAFETY: the call filled the whole structure, which was zeroed
+            // before and holds only integers and byte arrays anyway.
+            let info = unsafe { info.assume_init() };
+            if info.pbi_status == SZOMB {
+                return Probe::Exited;
+            }
+            return Probe::Running {
+                started: i64::try_from(info.pbi_start_tvsec).ok(),
+            };
+        }
+        // Signal 0 only checks the pid: EPERM means it belongs to someone else.
+        // SAFETY: no pointer arguments.
+        let found = unsafe { libc::kill(pid, 0) } == 0
+            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+        if found {
+            Probe::Inaccessible
+        } else {
+            Probe::Gone
+        }
     }
 }
 
@@ -544,6 +678,111 @@ mod tests {
         assert!(!is_alive(4, Some(&created.to_string())));
     }
 
+    #[test]
+    fn reads_lstart_text_as_utc() {
+        assert_eq!(lstart_as_unix_secs("Thu Jan  1 00:00:00 1970"), Some(0));
+        assert_eq!(lstart_as_unix_secs("Wed Mar  1 00:00:00 2000"), Some(951_868_800));
+        assert_eq!(lstart_as_unix_secs("Tue Feb 29 23:59:59 2028"), Some(1_835_481_599));
+        assert_eq!(lstart_as_unix_secs(" Tue Nov 3 21:34:47 2026 "), Some(1_793_741_687));
+        for text in [
+            "",
+            "133444736000000000",
+            "Tue Nov  3 21:34:47",
+            "Tue Nov  3 21:34 2026",
+            "Tue Nov  3 21:34:47:00 2026",
+            "Tue Nov  3 24:00:00 2026",
+            "Tue Nov 32 21:34:47 2026",
+            "mar. nov.  3 21:34:47 2026",
+            "Tue Nov  3 21:34:47 2026 UTC",
+        ] {
+            assert_eq!(lstart_as_unix_secs(text), None, "{text:?}");
+        }
+    }
+
+    /// `secs` as `ps -o lstart` writes it in UTC.
+    #[cfg(target_os = "macos")]
+    fn lstart_text(secs: i64) -> String {
+        const DAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
+        let days = secs.div_euclid(86_400);
+        let time = secs.rem_euclid(86_400);
+        let (year, month, day) = (1970..)
+            .flat_map(|year| (1..=12).map(move |month| (year, month)))
+            .find_map(|(year, month)| {
+                let first = days_from_civil(year, month, 1);
+                let next = if month == 12 {
+                    days_from_civil(year + 1, 1, 1)
+                } else {
+                    days_from_civil(year, month + 1, 1)
+                };
+                (first..next).contains(&days).then(|| (year, month, days - first + 1))
+            })
+            .expect("a date after 1970");
+        format!(
+            "{} {} {day:>2} {:02}:{:02}:{:02} {year}",
+            DAYS[days.rem_euclid(7) as usize],
+            MONTHS[month as usize - 1],
+            time / 3_600,
+            time / 60 % 60,
+            time % 60,
+        )
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn lstart_text_round_trips() {
+        assert_eq!(lstart_text(1_793_741_687), "Tue Nov  3 21:34:47 2026");
+        assert_eq!(lstart_text(1_835_481_599), "Tue Feb 29 23:59:59 2028");
+        for secs in [0, 951_868_800, 1_793_741_687, 1_835_481_599] {
+            assert_eq!(lstart_as_unix_secs(&lstart_text(secs)), Some(secs));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn checks_process_on_macos() {
+        let me = std::process::id();
+        assert!(!is_alive(DEAD_PID, None));
+
+        let mac::Probe::Running {
+            started: Some(started),
+        } = mac::probe(me)
+        else {
+            panic!("own start time");
+        };
+        assert!(is_alive(me, Some(&lstart_text(started))));
+        assert!(is_alive(me, Some(&lstart_text(started + 1))));
+        assert!(!is_alive(me, Some(&lstart_text(started + 2))));
+        assert!(!is_alive(me, Some("Thu Jan  1 00:00:01 1970")));
+        assert!(is_alive(me, Some("not a start time")));
+        assert!(is_alive(me, Some(&lstart_text(started + 3_600))), "local time, UTC+1");
+        assert!(is_alive(me, Some(&lstart_text(started - 19_800))), "local time, UTC-5:30");
+        assert!(!is_alive(me, Some(&lstart_text(started + 15 * 3_600))), "beyond 14 h");
+
+        // launchd always runs, as root.
+        assert!(is_alive(1, None));
+        // With a start time, a process of another account is a reused pid.
+        assert!(!is_alive(1, Some("Thu Jan  1 00:00:01 1970")));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn read_live_rejects_reused_pid_on_macos() {
+        let me = std::process::id();
+        let mac::Probe::Running {
+            started: Some(started),
+        } = mac::probe(me)
+        else {
+            panic!("own start time");
+        };
+        let dir = TempDir::new("reuse-mac");
+        dir.write("1.json", &entry_json(me, "current", Some(&lstart_text(started))));
+        dir.write("2.json", &entry_json(me, "previous-owner", Some("Fri Jan  2 10:00:00 1970")));
+
+        let live = read_live(&dir.0).expect("read_live");
+        let ids: Vec<&str> = live.iter().map(|e| e.session_id.as_str()).collect();
+        assert_eq!(ids, ["current"]);
+    }
+
     /// Fresh scratch directory under the system temp folder, removed on drop.
     struct TempDir(PathBuf);
 
@@ -710,6 +949,11 @@ mod tests {
             let gap = match (expected, actual) {
                 (Some(x), Some(a)) => format!("{}", i128::from(a) - i128::from(x)),
                 _ => "-".into(),
+            };
+            #[cfg(target_os = "macos")]
+            let gap = match (e.proc_start.as_deref().and_then(lstart_as_unix_secs), mac::probe(e.pid)) {
+                (Some(x), mac::Probe::Running { started: Some(a) }) => format!("{} s", a - x),
+                _ => gap,
             };
             println!(
                 "file pid={} status={:?} alive={} procStart-gap={gap}",

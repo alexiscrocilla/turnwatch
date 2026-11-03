@@ -1735,9 +1735,15 @@ fn on_screen_session<'a>(
         .map(|(_, host)| host)
 }
 
+/// Bundle identifier of the Claude Desktop app on macOS. The CLI it runs is
+/// an app bundle too, `com.anthropic.claude-code`.
+#[cfg(target_os = "macos")]
+pub const DESKTOP_BUNDLE_ID: &str = "com.anthropic.claudefordesktop";
+
 /// True when `image` (full path of an executable) is the Claude Desktop app:
 /// `claude.exe` from the Store package or the classic installer. CLI
 /// processes share the file name but live elsewhere.
+#[cfg(any(windows, test))]
 fn is_desktop_app_image(image: &str) -> bool {
     let lower = image.to_lowercase();
     let file_name = lower.rsplit(['\\', '/']).next().unwrap_or_default();
@@ -1795,7 +1801,20 @@ fn desktop_app_in_foreground() -> bool {
     }
 }
 
-#[cfg(not(windows))]
+/// True when Claude Desktop is the active app. Unlike on Windows, its dialogs
+/// and quick-entry popup count too: macOS reports apps, not windows. The
+/// answer follows the main thread's run loop, which the app runs.
+#[cfg(target_os = "macos")]
+fn desktop_app_in_foreground() -> bool {
+    use objc2_app_kit::NSWorkspace;
+
+    NSWorkspace::sharedWorkspace()
+        .frontmostApplication()
+        .and_then(|app| app.bundleIdentifier())
+        .is_some_and(|id| id.to_string() == DESKTOP_BUNDLE_ID)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn desktop_app_in_foreground() -> bool {
     false
 }
@@ -2856,14 +2875,17 @@ mod tests {
 
     #[test]
     fn only_relevant_files_wake_the_worker() {
-        assert!(registry_event(Path::new(r"C:\u\.claude\sessions\36220.json")));
-        assert!(!registry_event(Path::new(r"C:\u\.claude\sessions\36220.0a1b.key")));
-        assert!(!registry_event(Path::new(r"C:\u\.claude\sessions")));
+        // Built with `join`, so the separators are this system's.
+        let sessions = Path::new("u").join(".claude").join("sessions");
+        assert!(registry_event(&sessions.join("36220.json")));
+        assert!(!registry_event(&sessions.join("36220.0a1b.key")));
+        assert!(!registry_event(&sessions));
 
-        assert!(desktop_event(Path::new(r"C:\a\claude-code-sessions\acc\org\local_1.json")));
-        assert!(!desktop_event(Path::new(r"C:\a\claude-code-sessions\acc\org\local_1.json.tmp")));
-        assert!(!desktop_event(Path::new(r"C:\a\claude-code-sessions\acc\org\other.json")));
-        assert!(!desktop_event(Path::new(r"C:\a\claude-code-sessions\acc\org\local_.json")));
+        let org = Path::new("a").join("claude-code-sessions").join("acc").join("org");
+        assert!(desktop_event(&org.join("local_1.json")));
+        assert!(!desktop_event(&org.join("local_1.json.tmp")));
+        assert!(!desktop_event(&org.join("other.json")));
+        assert!(!desktop_event(&org.join("local_.json")));
 
         let root = Path::new(r"C:\u\.claude\projects");
         let live: HashSet<String> = ["abc-123".to_owned()].into();
@@ -2919,7 +2941,7 @@ mod tests {
 
     #[test]
     fn foreground_check_runs() {
-        // The answer depends on the machine; this only exercises the Win32 path.
+        // The answer depends on the machine; this only exercises the system calls.
         let _ = desktop_app_in_foreground();
     }
 

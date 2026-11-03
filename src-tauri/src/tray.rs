@@ -33,6 +33,12 @@ pub const MENU_LANGUAGE_EN: &str = "language_en";
 pub const MENU_LANGUAGE_FR: &str = "language_fr";
 pub const MENU_QUIT: &str = "quit";
 
+/// The automatic language item, named after the system.
+#[cfg(not(target_os = "macos"))]
+const SAME_AS_SYSTEM: (&str, &str) = ("Same as Windows", "Comme Windows");
+#[cfg(target_os = "macos")]
+const SAME_AS_SYSTEM: (&str, &str) = ("Same as macOS", "Comme macOS");
+
 const AMBER: [u8; 3] = [0xF5, 0x9E, 0x0B];
 const RED: [u8; 3] = [0xEF, 0x44, 0x44];
 const BLUE: [u8; 3] = [0x3B, 0x82, 0xF6];
@@ -218,11 +224,11 @@ fn label(id: &str) -> &'static str {
             "Notifier le quota (5 h : 80 %, 95 % ; semaine, Fable : 90 %)",
         ),
         MENU_INCLUDE_CLI => ("Include sessions outside Desktop", "Inclure les sessions hors Desktop"),
-        MENU_AUTOSTART => ("Start with Windows", "Lancer au démarrage de Windows"),
+        MENU_AUTOSTART => crate::autostart::ITEM,
         MENU_AUTO_UPDATE => ("Update automatically", "Mettre à jour automatiquement"),
         MENU_CHECK_UPDATE => ("Check for updates", "Rechercher une mise à jour"),
         MENU_LANGUAGE => ("Language", "Langue"),
-        MENU_LANGUAGE_AUTO => ("Same as Windows", "Comme Windows"),
+        MENU_LANGUAGE_AUTO => SAME_AS_SYSTEM,
         MENU_LANGUAGE_EN => ("English", "English"),
         MENU_LANGUAGE_FR => ("Français", "Français"),
         MENU_QUIT => ("Quit", "Quitter"),

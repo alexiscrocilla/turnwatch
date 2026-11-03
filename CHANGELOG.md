@@ -2,6 +2,11 @@
 
 Notable changes to this project. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- Turnwatch runs on macOS (13 or later): a menu bar app that reads Claude Desktop's files in `~/Library/Application Support/Claude`, opens a session in Desktop on a click, finds `gh` from Homebrew even when started from the Finder, adds the companion mod itself when it starts, opens at login if asked, and updates itself from the same releases.
+- On Windows, the French message shown when the start with Windows cannot be changed reads correctly ("Impossible d'activer…").
+
 ## 0.3.0 (2026-11-03)
 
 - A quota window the plan no longer has loses its gauge: verified Ultra accounts, which have had no 5-hour window since October 30, 2026, no longer see a "5 h —" gauge that never comes back.
