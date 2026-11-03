@@ -2,6 +2,12 @@
 
 Notable changes to this project. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- A quota window the plan no longer has loses its gauge: verified Ultra accounts, which have had no 5-hour window since October 30, 2026, no longer see a "5 h —" gauge that never comes back.
+- A Fable gauge shows Fable's weekly share (on Max and Ultra, up to half of the week), with its own notification at 90%, in the tray tooltip too. Only the companion mod can report it, once Claude Code passes that window on to mods.
+- The companion mod (0.1.2) writes Fable's weekly share as soon as Claude Code reports it.
+
 ## 0.2.1 (2026-10-31)
 
 - The window keeps its width and expanded height from one start to the next, updates included.

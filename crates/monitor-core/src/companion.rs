@@ -1,9 +1,10 @@
 //! What the `turnwatch-companion` Claude Code mod writes for the monitor, in
 //! `<claude_home>\session-monitor`:
 //!
-//! - `quota.json`: `{"version":1,"sampledAt":<ms>,"fiveHour":{"percent":23.5,"resetsAt":<ms>},"sevenDay":{…}}`,
+//! - `quota.json`: `{"version":1,"sampledAt":<ms>,"fiveHour":{"percent":23.5,"resetsAt":<ms>},"sevenDay":{…},"fable":{…}}`,
 //!   the plan's usage as the latest API response of any session reported it,
-//!   each window's `resetsAt` left out when the engine gave none;
+//!   each window's `resetsAt` left out when the engine gave none, and each
+//!   window left out when the engine did not report it;
 //! - `sessions/<cli id>.json`: `{"version":1,"agents":[{"id":"…","description":"…","type":"Explore"}]}`,
 //!   the sub-agents running in that session.
 //!
@@ -40,6 +41,7 @@ pub struct QuotaSample {
     pub sampled_at: i64,
     pub five_hour: Option<ExactWindow>,
     pub seven_day: Option<ExactWindow>,
+    pub fable: Option<ExactWindow>,
 }
 
 /// The contents of `sessions/<cli id>.json`.
@@ -73,9 +75,9 @@ pub fn merged_quota(desktop: Option<Quota>, sample: Option<&QuotaSample>, now_ms
     let Some(sample) = sample.filter(|s| now_ms.saturating_sub(s.sampled_at) < WEEK) else {
         return desktop;
     };
-    let (desktop_at, five_hour, seven_day) = match desktop {
-        Some(q) => (Some(q.sampled_at), q.five_hour, q.seven_day),
-        None => (None, None, None),
+    let (desktop_at, five_hour, seven_day, fable) = match desktop {
+        Some(q) => (Some(q.sampled_at), q.five_hour, q.seven_day, q.fable),
+        None => (None, None, None, None),
     };
     let desktop_is_newer = desktop_at.is_some_and(|at| at > sample.sampled_at);
     let merge = |desktop, exact, length_ms| Merge {
@@ -90,6 +92,7 @@ pub fn merged_quota(desktop: Option<Quota>, sample: Option<&QuotaSample>, now_ms
         sampled_at: sample.sampled_at.max(desktop_at.unwrap_or(i64::MIN)),
         five_hour: merge(five_hour, sample.five_hour, FIVE_HOURS).window(),
         seven_day: merge(seven_day, sample.seven_day, WEEK).window(),
+        fable: merge(fable, sample.fable, WEEK).window(),
         fed_by_sessions: true,
     })
 }
@@ -235,6 +238,7 @@ mod tests {
             sampled_at,
             five_hour: Some(estimate(percent, Some(NOW + 73 * MIN))),
             seven_day: None,
+            fable: None,
             fed_by_sessions: false,
         })
     }
@@ -245,6 +249,7 @@ mod tests {
             sampled_at,
             five_hour: Some(ExactWindow { percent, resets_at }),
             seven_day: None,
+            fable: None,
         }
     }
 
@@ -255,6 +260,24 @@ mod tests {
         assert_eq!(sample.sampled_at, 5);
         assert_eq!(sample.five_hour.map(|w| (w.percent, w.resets_at)), Some((23.5, Some(9))));
         assert_eq!(sample.seven_day.map(|w| (w.percent, w.resets_at)), Some((11.0, None)));
+        assert_eq!(sample.fable, None);
+        // Ultra: no 5-hour window, Fable's share beside the week.
+        let text = r#"{"version":1,"sampledAt":5,"sevenDay":{"percent":80,"resetsAt":9},"fable":{"percent":42,"resetsAt":9}}"#;
+        let sample = parse_quota(text).expect("sample");
+        assert_eq!(sample.five_hour, None);
+        assert_eq!(sample.fable.map(|w| (w.percent, w.resets_at)), Some((42.0, Some(9))));
+    }
+
+    #[test]
+    fn fable_comes_from_the_mod_alone() {
+        let mut ultra = sample(NOW - MIN, 0.0, None);
+        ultra.five_hour = None;
+        ultra.seven_day = Some(ExactWindow { percent: 80.0, resets_at: Some(NOW + 2 * HOUR_5) });
+        ultra.fable = Some(ExactWindow { percent: 42.0, resets_at: Some(NOW + 2 * HOUR_5) });
+        let merged = merged_quota(None, Some(&ultra), NOW).expect("quota");
+        assert_eq!(merged.five_hour, None);
+        let fable = merged.fable.expect("fable");
+        assert_eq!((fable.percent, fable.resets_at, fable.length_ms), (42.0, Some(NOW + 2 * HOUR_5), WEEK));
     }
 
     #[test]

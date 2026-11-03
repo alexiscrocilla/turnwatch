@@ -1,5 +1,5 @@
 //! Toasts when the plan's usage crosses a threshold: the 5-hour window at
-//! 80 % then 95 %, the 7-day window at 90 %.
+//! 80 % then 95 %, the 7-day window and Fable's weekly share at 90 %.
 //!
 //! Each threshold is announced once per window. It is armed while the window
 //! is below it and fires when a sample reaches it. A window's usage only
@@ -29,13 +29,17 @@ use crate::toasts::{MONITOR_PREFIX, Toast};
 enum Window {
     FiveHour = 0,
     SevenDay = 1,
+    Fable = 2,
 }
 
+const WINDOWS: [Window; 3] = [Window::FiveHour, Window::SevenDay, Window::Fable];
+
 /// The thresholds announced, in percent, lowest first within a window.
-const THRESHOLDS: [(Window, u8); 3] = [
+const THRESHOLDS: [(Window, u8); 4] = [
     (Window::FiveHour, 80),
     (Window::FiveHour, 95),
     (Window::SevenDay, 90),
+    (Window::Fable, 90),
 ];
 
 /// While Desktop samples the quota, it does so every 15 minutes at most:
@@ -50,7 +54,7 @@ pub struct QuotaAlerts {
     /// until its window is first seen.
     armed: [Option<bool>; THRESHOLDS.len()],
     /// Per window: the latest possible end of the window last seen.
-    ends_by: [Option<i64>; 2],
+    ends_by: [Option<i64>; WINDOWS.len()],
     /// Since when the person has been using the computer without a pause
     /// long enough for Desktop to skip its samples; None while idle.
     active_since: Option<i64>,
@@ -67,8 +71,8 @@ impl QuotaAlerts {
             return Vec::new();
         };
         // A sample past the previous window's latest end is a new window.
-        let mut new_window = [false; 2];
-        for window in [Window::FiveHour, Window::SevenDay] {
+        let mut new_window = [false; WINDOWS.len()];
+        for window in WINDOWS {
             if let Some(usage) = window_of(quota, window) {
                 let slot = window as usize;
                 new_window[slot] = self.ends_by[slot].is_some_and(|end| quota.sampled_at > end);
@@ -160,6 +164,7 @@ fn window_of(quota: &Quota, window: Window) -> Option<&QuotaWindow> {
     match window {
         Window::FiveHour => quota.five_hour.as_ref(),
         Window::SevenDay => quota.seven_day.as_ref(),
+        Window::Fable => quota.fable.as_ref(),
     }
 }
 
@@ -170,6 +175,7 @@ fn toast(window: Window, usage: &QuotaWindow, now_ms: i64, lang: Lang) -> Toast 
     let (name, key) = match window {
         Window::FiveHour => (lang.pick("5-hour quota", "Quota 5 h"), "quota-5h"),
         Window::SevenDay => (lang.pick("Weekly quota", "Quota de la semaine"), "quota-7d"),
+        Window::Fable => (lang.pick("Fable quota", "Quota Fable"), "quota-fable"),
     };
     let percent = lang.percent(usage.percent.round().clamp(0.0, 999.0) as u32);
     let reset = match usage.resets_at {
@@ -227,6 +233,7 @@ mod tests {
             sampled_at: NOW,
             five_hour: window(five_hour),
             seven_day: window(seven_day),
+            fable: None,
             fed_by_sessions: false,
         }
     }
@@ -273,6 +280,25 @@ mod tests {
         assert_eq!(keys, ["monitor:quota-5h", "monitor:quota-7d"]);
         assert_ne!(keys[0], crate::toasts::SUMMARY_KEY);
         assert!(toasts.iter().all(|t| t.body.starts_with("Used up. ")));
+    }
+
+    #[test]
+    fn fable_has_its_own_threshold_and_key() {
+        let mut alerts = QuotaAlerts::default();
+        // Ultra: no 5-hour window.
+        let ultra = |seven_day: f64, fable: f64| Quota {
+            five_hour: None,
+            fable: window(fable),
+            ..quota(0.0, seven_day)
+        };
+        assert!(titles(&mut alerts, &ultra(40.0, 60.0)).is_empty());
+        let toasts = alerts.check(Some(&ultra(45.0, 90.2)), &Settings::default(), NOW);
+        assert_eq!(toasts.len(), 1);
+        assert_eq!(toasts[0].title, "Fable quota at 90%");
+        assert_eq!(toasts[0].key, "monitor:quota-fable");
+        assert!(titles(&mut alerts, &ultra(46.0, 95.0)).is_empty(), "once");
+        let alert = toast(Window::Fable, &QuotaWindow { percent: 92.0, ..QuotaWindow::default() }, NOW, Lang::Fr);
+        assert_eq!(alert.title, "Quota Fable à 92 %");
     }
 
     #[test]

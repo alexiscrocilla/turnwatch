@@ -9,8 +9,12 @@
 //!
 //! - version 2: `{"version":2,"samples":[{"t":<ms>,"org":"<uuid>","u":{"fh":19,"sd":26}}]}`,
 //!   `fh` the 5-hour window, `sd` the 7-day one (other keys: per-model weekly
-//!   windows, extra usage);
+//!   windows, extra usage; none for Fable's share);
 //! - version 1: `{"version":1,"samples":[{"t":<ms>,"fh":19,"sd":26}]}`.
+//!
+//! A sample holds the windows the plan has, even at 0 %: a window missing
+//! from the latest one is gone. Verified Ultra accounts have had no 5-hour
+//! window since 2026-10-30, so their samples hold `sd` alone.
 //!
 //! Samples carry no reset time, so resets are placed from the history: a
 //! window's percent only grows until it resets. The 5-hour window starts
@@ -80,19 +84,26 @@ pub fn parse_history(json: &str) -> Option<History> {
     })
 }
 
-/// The plan's usage as of the latest sample, None without any sample.
+/// The plan's usage as of the latest sample, None without any sample. A
+/// window the latest sample lacks is left out: the plan no longer has it.
 pub fn quota(history: &History, now_ms: i64) -> Option<Quota> {
-    let five_hour = rolling_window(&history.five_hour, now_ms);
-    let seven_day = weekly_window(&history.seven_day, now_ms);
     let sampled_at = history
         .five_hour
         .last()
         .map(|p| p.t)
         .max(history.seven_day.last().map(|p| p.t))?;
+    let current = |points: &[Point]| points.last().is_some_and(|p| p.t == sampled_at);
+    let five_hour = current(&history.five_hour)
+        .then(|| rolling_window(&history.five_hour, now_ms))
+        .flatten();
+    let seven_day = current(&history.seven_day)
+        .then(|| weekly_window(&history.seven_day, now_ms))
+        .flatten();
     Some(Quota {
         sampled_at,
         five_hour,
         seven_day,
+        fable: None,
         fed_by_sessions: false,
     })
 }
@@ -427,12 +438,31 @@ mod tests {
     #[test]
     fn quota_takes_the_latest_sample_time() {
         let history = History {
-            five_hour: vec![p(T0, 10.0)],
+            five_hour: vec![p(T0, 10.0), p(T0 + MIN, 11.0)],
             seven_day: vec![p(T0 - MIN, 20.0), p(T0 + MIN, 21.0)],
         };
         let q = quota(&history, T0 + 2 * MIN).expect("quota");
         assert_eq!(q.sampled_at, T0 + MIN);
-        assert_eq!(q.five_hour.map(|w| w.percent), Some(10.0));
+        assert_eq!(q.five_hour.map(|w| w.percent), Some(11.0));
         assert_eq!(q.seven_day.map(|w| w.percent), Some(21.0));
+        assert_eq!(q.fable, None);
+    }
+
+    #[test]
+    fn a_window_the_latest_sample_lacks_is_gone() {
+        // The account was verified for Ultra: samples stop holding `fh`.
+        let json = r#"{"version":2,"samples":[
+            {"t":1000,"org":"a","u":{"fh":1,"sd":15}},
+            {"t":2000,"org":"a","u":{"sd":15}},
+            {"t":3000,"org":"a","u":{"sd":16}}
+        ]}"#;
+        let history = parse_history(json).expect("history");
+        let q = quota(&history, 3000).expect("quota");
+        assert_eq!(q.five_hour, None);
+        assert_eq!(q.seven_day.map(|w| w.percent), Some(16.0));
+        assert_eq!(q.sampled_at, 3000);
+        // At 0 % a window is still in the sample, so still shown.
+        let idle = parse_history(r#"{"version":2,"samples":[{"t":5,"u":{"fh":0,"sd":15}}]}"#).expect("history");
+        assert_eq!(quota(&idle, 5).and_then(|q| q.five_hour).map(|w| w.percent), Some(0.0));
     }
 }

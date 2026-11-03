@@ -38,14 +38,18 @@ function window(limits: SessionRateLimit[], kind: string) {
 // Like the write functions after it, it never throws: the monitor stays on
 // Desktop if this mod writes nothing, and a failure must not disturb the
 // session being observed. The next event writes everything again.
+// A window the response did not report is left out: verified Ultra accounts
+// have no 5-hour window. Fable's weekly share is `seven_day_overage_included`,
+// written whenever the engine reports it.
 async function writeQuota($: EngineInterface, limits: SessionRateLimit[]) {
   try {
     const fiveHour = window(limits, 'five_hour')
     const sevenDay = window(limits, 'seven_day')
-    if (fiveHour === undefined && sevenDay === undefined) return
+    const fable = window(limits, 'seven_day_overage_included')
+    if (fiveHour === undefined && sevenDay === undefined && fable === undefined) return
 
     const sampledAt = await $.clock.now()
-    const quota = { version: VERSION, sampledAt, fiveHour, sevenDay }
+    const quota = { version: VERSION, sampledAt, fiveHour, sevenDay, fable }
     await $.fs.write(`${await folder($)}/quota.json`, JSON.stringify(quota))
   } catch {
     return

@@ -262,6 +262,11 @@ button {
   min-width: 0;
 }
 
+/* Three gauges (5 h, week, Fable) fit the default width closer together. */
+.quota-meters:has(> .meter:nth-child(3)) {
+  gap: 14px;
+}
+
 /* Neutral until it gets close to the limit: only amber and red call for attention. */
 .meter {
   --meter-color: var(--text-muted);

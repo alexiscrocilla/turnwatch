@@ -606,6 +606,7 @@ mod tests {
                     ..QuotaWindow::default()
                 }),
                 seven_day: None,
+                fable: None,
                 fed_by_sessions: false,
             }),
             ..Snapshot::default()

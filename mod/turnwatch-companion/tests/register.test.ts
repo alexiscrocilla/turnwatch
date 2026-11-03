@@ -64,6 +64,27 @@ test('the quota is written with its reset times in milliseconds', async ($, on) 
   })
 })
 
+test('Fable is written beside the week, without the 5-hour window an Ultra plan lacks', async ($, on) => {
+  const below = engine(on)
+  on('session.measure', (_, e) => ({ changed: e.changed }))
+
+  await $.session.measure(
+    measure({
+      rateLimits: [
+        { kind: 'seven_day', percentUsed: 80, resetsAt: '2026-11-05T05:00:00.000Z' },
+        { kind: 'seven_day_overage_included', percentUsed: 42.5, resetsAt: '2026-11-05T05:00:00.000Z' },
+      ],
+    }),
+  )
+
+  expect(JSON.parse(below.files.get(`${FOLDER}/quota.json`) ?? 'null')).toEqual({
+    version: 1,
+    sampledAt: 1_000,
+    sevenDay: { percent: 80, resetsAt: Date.parse('2026-11-05T05:00:00.000Z') },
+    fable: { percent: 42.5, resetsAt: Date.parse('2026-11-05T05:00:00.000Z') },
+  })
+})
+
 test('a measure without a quota writes nothing', async ($, on) => {
   const below = engine(on)
   on('session.measure', (_, e) => ({ changed: e.changed }))

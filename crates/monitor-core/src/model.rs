@@ -505,10 +505,14 @@ pub struct ProposedTask {
 pub struct Quota {
     /// When the latest sample was taken.
     pub sampled_at: i64,
-    /// The 5-hour window.
+    /// The 5-hour window. None on plans without one (verified Ultra accounts).
     pub five_hour: Option<QuotaWindow>,
-    /// The 7-day window.
+    /// The 7-day window, all models.
     pub seven_day: Option<QuotaWindow>,
+    /// Fable's weekly share: Max and Ultra plans may spend up to half of the
+    /// weekly limit on Fable models. Only the mod reports it, from the engine's
+    /// `seven_day_overage_included` window.
+    pub fable: Option<QuotaWindow>,
     /// The mod reports it as sessions run: no sample for a while only means
     /// that none ran, not that Desktop must be asked to sample again.
     pub fed_by_sessions: bool,
@@ -520,7 +524,7 @@ pub struct Quota {
 pub struct QuotaWindow {
     /// Percent used.
     pub percent: f64,
-    /// Length of the window: 5 hours or 7 days.
+    /// Length of the window: 5 hours or 7 days (Fable's too).
     pub length_ms: i64,
     /// End of the current window: exact from the mod, else estimated as the
     /// middle of the range the history allows. None when nothing is used, or
@@ -706,7 +710,7 @@ pub struct Settings {
     pub notify_on_finished: bool,
     pub notify_on_error: bool,
     /// Toast when the plan's usage crosses a threshold (5 hours: 80 % and
-    /// 95 %; 7 days: 90 %).
+    /// 95 %; 7 days and Fable: 90 %).
     pub notify_on_quota: bool,
     /// Also list sessions started outside Claude Desktop.
     pub include_cli_sessions: bool,

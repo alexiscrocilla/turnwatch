@@ -214,8 +214,8 @@ fn label(id: &str) -> &'static str {
         MENU_NOTIFY_FINISHED => ("Notify when a session finishes", "Notifier quand une session termine"),
         MENU_NOTIFY_ERROR => ("Notify errors", "Notifier les erreurs"),
         MENU_NOTIFY_QUOTA => (
-            "Notify the quota (5 h: 80%, 95%; week: 90%)",
-            "Notifier le quota (5 h : 80 %, 95 % ; semaine : 90 %)",
+            "Notify the quota (5 h: 80%, 95%; week, Fable: 90%)",
+            "Notifier le quota (5 h : 80 %, 95 % ; semaine, Fable : 90 %)",
         ),
         MENU_INCLUDE_CLI => ("Include sessions outside Desktop", "Inclure les sessions hors Desktop"),
         MENU_AUTOSTART => ("Start with Windows", "Lancer au démarrage de Windows"),
@@ -332,8 +332,8 @@ pub fn tooltip(counts: &Counts, quota: Option<&Quota>, lang: Lang) -> String {
     truncate_chars(&text, TOOLTIP_MAX_CHARS)
 }
 
-/// "Quota: 5 h 19% · 7 d 28%", the windows that reset since the latest sample
-/// left out.
+/// "Quota: 5 h 19% · 7 d 28% · Fable 12%", the windows that reset since the
+/// latest sample left out.
 fn quota_line(quota: &Quota, lang: Lang) -> Option<String> {
     let part = |label: &str, window: Option<&QuotaWindow>| {
         window
@@ -343,6 +343,7 @@ fn quota_line(quota: &Quota, lang: Lang) -> Option<String> {
     let parts: Vec<String> = [
         part("5 h", quota.five_hour.as_ref()),
         part(lang.pick("7 d", "7 j"), quota.seven_day.as_ref()),
+        part("Fable", quota.fable.as_ref()),
     ]
     .into_iter()
     .flatten()
@@ -458,11 +459,12 @@ mod tests {
             sampled_at: 1,
             five_hour: window(19.4, false),
             seven_day: window(27.6, false),
+            fable: window(12.2, false),
             fed_by_sessions: false,
         };
         assert_eq!(
             tooltip(&counts(0, 0, 0, 1, 0), Some(&quota), Lang::En),
-            "1 working\nQuota: 5 h 19% · 7 d 28%"
+            "1 working\nQuota: 5 h 19% · 7 d 28% · Fable 12%"
         );
     }
 
@@ -529,6 +531,7 @@ mod tests {
             sampled_at: 1,
             five_hour: window(19.4, false),
             seven_day: window(27.6, false),
+            fable: None,
             fed_by_sessions: false,
         };
         let c = counts(0, 0, 0, 1, 0);

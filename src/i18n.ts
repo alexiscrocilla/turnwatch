@@ -157,8 +157,10 @@ const en = {
   // Quota
   gaugeFiveHours: "5 h",
   gaugeWeek: "7 d",
+  gaugeFable: "Fable",
   windowFiveHours: "5-hour window",
   windowWeek: "Week",
+  windowFable: "Fable's weekly share",
   quotaGauge: (gauge: string) => `Quota ${gauge}`,
   percentUsed: (n: number) => `${n}% used`,
   lastSample: "Last sample",
@@ -302,6 +304,7 @@ const en = {
   mockWide: "wide window",
   mockEmpty: "empty",
   mockHealth: "sources down",
+  mockUltra: "Ultra plan",
 };
 
 const fr: typeof en = {
@@ -418,8 +421,10 @@ const fr: typeof en = {
   // Quota
   gaugeFiveHours: "5 h",
   gaugeWeek: "7 j",
+  gaugeFable: "Fable",
   windowFiveHours: "Fenêtre de 5 h",
   windowWeek: "Semaine",
+  windowFable: "Part Fable de la semaine",
   quotaGauge: (gauge) => `Quota ${gauge}`,
   percentUsed: (n) => `${n} % utilisés`,
   lastSample: "Dernier relevé",
@@ -564,6 +569,7 @@ const fr: typeof en = {
   mockWide: "fenêtre large",
   mockEmpty: "vide",
   mockHealth: "sources en panne",
+  mockUltra: "forfait Ultra",
 };
 
 /** The messages in the current language. Ask each time: a switch changes them. */

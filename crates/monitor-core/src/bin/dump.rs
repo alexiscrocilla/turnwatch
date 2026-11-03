@@ -160,7 +160,7 @@ fn summary_lines(snapshot: &Snapshot) -> Vec<String> {
     lines
 }
 
-/// `quota | sampled … ago | 5 h … | 7 d …`, times relative to the snapshot.
+/// `quota | sampled … ago | 5 h … | 7 d … | Fable …`, times relative to the snapshot.
 fn quota_line(snapshot: &Snapshot) -> Option<String> {
     let quota = snapshot.quota.as_ref()?;
     let now = snapshot.generated_at;
@@ -178,10 +178,11 @@ fn quota_line(snapshot: &Snapshot) -> Option<String> {
         },
     };
     Some(format!(
-        "quota | sampled {} ago | {} | {}",
+        "quota | sampled {} ago | {} | {} | {}",
         duration(now - quota.sampled_at),
         window("5 h", quota.five_hour.as_ref()),
         window("7 d", quota.seven_day.as_ref()),
+        window("Fable", quota.fable.as_ref()),
     ))
 }
 

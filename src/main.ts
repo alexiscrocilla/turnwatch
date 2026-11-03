@@ -357,8 +357,9 @@ function sanitizeQuota(v: unknown): Quota | null {
   const sampledAt = num(v.sampledAt);
   const fiveHour = sanitizeWindow(v.fiveHour);
   const sevenDay = sanitizeWindow(v.sevenDay);
-  if (sampledAt === null || (!fiveHour && !sevenDay)) return null;
-  return { sampledAt, fiveHour, sevenDay, fedBySessions: v.fedBySessions === true };
+  const fable = sanitizeWindow(v.fable);
+  if (sampledAt === null || (!fiveHour && !sevenDay && !fable)) return null;
+  return { sampledAt, fiveHour, sevenDay, fable, fedBySessions: v.fedBySessions === true };
 }
 
 function sanitizeTasks(v: unknown): ProposedTask[] {
@@ -1018,10 +1019,13 @@ function elapsedOf(w: QuotaWindow, now: number): number | null {
   return Math.round(Math.min(Math.max(share, 0), 100) * 2) / 2;
 }
 
-function meterModel(week: boolean, w: QuotaWindow, quota: Quota, now: number): MeterModel {
+type QuotaKind = "fiveHour" | "sevenDay" | "fable";
+
+function meterModel(kind: QuotaKind, w: QuotaWindow, quota: Quota, now: number): MeterModel {
   const msg = t();
-  const label = week ? msg.gaugeWeek : msg.gaugeFiveHours;
-  const name = week ? msg.windowWeek : msg.windowFiveHours;
+  const week = kind !== "fiveHour";
+  const label = { fiveHour: msg.gaugeFiveHours, sevenDay: msg.gaugeWeek, fable: msg.gaugeFable }[kind];
+  const name = { fiveHour: msg.windowFiveHours, sevenDay: msg.windowWeek, fable: msg.windowFable }[kind];
   const shown = Math.round(w.percent);
   const sampled = msg.labeled(quota.fedBySessions ? msg.lastSample : msg.sampledByDesktop, formatClock(quota.sampledAt));
   if (w.expired) {
@@ -1082,8 +1086,15 @@ function quotaModels(now: number): MeterModel[] {
   const quota = snapshot && isReady() ? snapshot.quota : null;
   if (!quota) return [];
   const out: MeterModel[] = [];
-  if (quota.fiveHour) out.push(meterModel(false, quota.fiveHour, quota, now));
-  if (quota.sevenDay) out.push(meterModel(true, quota.sevenDay, quota, now));
+  if (quota.fiveHour) out.push(meterModel("fiveHour", quota.fiveHour, quota, now));
+  const week = quota.sevenDay ? meterModel("sevenDay", quota.sevenDay, quota, now) : null;
+  if (week) out.push(week);
+  if (quota.fable) {
+    const fable = meterModel("fable", quota.fable, quota, now);
+    // Fable's share resets with the week: one day shown is enough, the tooltip keeps it.
+    if (fable.reset === week?.reset) fable.reset = "";
+    out.push(fable);
+  }
   return out;
 }
 
@@ -2454,6 +2465,7 @@ function renderMockCaption(caption: HTMLElement): void {
     [msg.mockWide, "?wide"],
     [msg.mockEmpty, "?scenario=empty"],
     [msg.mockHealth, "?scenario=health"],
+    [msg.mockUltra, "?scenario=ultra"],
   ];
   const nodes: Array<Node | string> = [msg.mockCaption];
   scenarios.forEach(([label, href], i) => {

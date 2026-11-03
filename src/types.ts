@@ -232,8 +232,11 @@ export interface ProposedTask {
 export interface Quota {
   /** When the latest sample was taken. */
   sampledAt: number;
+  /** Null on plans without one (verified Ultra accounts). */
   fiveHour: QuotaWindow | null;
   sevenDay: QuotaWindow | null;
+  /** Fable's weekly share (Max, Ultra): up to half the week. Only the mod reports it. */
+  fable: QuotaWindow | null;
   /** The mod reports it as sessions run: no sample for a while only means none ran. */
   fedBySessions: boolean;
 }
@@ -241,7 +244,7 @@ export interface Quota {
 /** One usage window of the plan, as of the latest sample. */
 export interface QuotaWindow {
   percent: number;
-  /** 5 hours or 7 days. */
+  /** 5 hours or 7 days (Fable's too). */
   lengthMs: number;
   /** End of the current window: exact from the mod, else the middle of the possible range; null when unknown. */
   resetsAt: number | null;
