@@ -9,7 +9,7 @@ The monitor answers one question: which of my sessions needs me now? Some choice
 - **Current work only.** It shows what is in progress. Token counts, backlogs and lists of worktrees are out of scope.
 - **Read-only.** The app reads Claude Code's and Claude Desktop's files and never writes in them. Only the companion mod writes, and only in `~/.claude/session-monitor`.
 - **Local.** No telemetry, no network call of its own beyond the update check (and `gh`, for PR status), and no credential read, by the app or by the mod.
-- **Quiet.** No continuous animation: it would keep WebView2 busy all day in a window that stays open. Anything that moves does so on an event.
+- **Quiet.** No continuous animation: it would keep the web view (WebView2, or WebKit on macOS) busy all day in a window that stays open. Anything that moves does so on an event.
 - **Windows first, macOS too.** Code for one system goes behind `cfg(windows)` or `cfg(target_os = "macos")`; other systems only get stubs that compile. A change on one system must leave the other as it was.
 
 ## Getting started
@@ -24,7 +24,7 @@ pnpm install
 pnpm tauri dev
 ```
 
-For interface work alone, `pnpm dev` serves it on http://localhost:1420 with fictional data, with no need for Claude Desktop. `?lang=en` or `?lang=fr` picks the language, and `?scenario=empty`, `?scenario=health` or `?scenario=paused` shows the other states.
+For interface work alone, `pnpm dev` serves it on http://localhost:1420 with fictional data, with no need for Claude Desktop. `?lang=en` or `?lang=fr` picks the language, `?wide` widens the window, and `?scenario=empty`, `?scenario=health`, `?scenario=paused` or `?scenario=ultra` (a plan with no 5-hour window) shows the other states.
 
 To check what the engine reads on your machine, with no window:
 
@@ -85,7 +85,7 @@ Sign the newer installer with `pnpm tauri signer sign --app-version`, serve it w
 
 A release build adds the mod to your real Claude Code configuration as soon as it starts; a debug build (`pnpm tauri dev`) never does. Test it from the Finder, not from a terminal: only then does the app get launchd's short PATH, as your users' copy will. `CLAUDE_CONFIG_DIR` keeps the mod out of your configuration, as on Windows, but only when the app inherits it, so start it with `open --env CLAUDE_CONFIG_DIR=/some/scratch/folder src-tauri/target/release/bundle/macos/Turnwatch.app`.
 
-To test an update, use the same throwaway key and local server as on Windows, with a `latest.json` whose `darwin-aarch64` entry points at a signed `Turnwatch.app.tar.gz` (the bundle, compressed with `tar -czf`), and run the older build from `~/Applications`: only a copy in an Applications folder updates itself.
+To test an update, use the same throwaway key and local server as on Windows, with a `latest.json` whose `darwin-aarch64` entry points at a signed `Turnwatch.app.tar.gz`. Compress the bundle as [`scripts/release.mjs`](scripts/release.mjs) does, with `COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs -czf`: a plain `tar` can add AppleDouble `._` files, which would land in the updated bundle and break its signature. Run the older build from `~/Applications`: only a copy in an Applications folder updates itself.
 
 ## Releasing
 

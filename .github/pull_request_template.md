@@ -4,7 +4,7 @@
 
 ## Checked
 
-- [ ] `pnpm check` passes (see [CONTRIBUTING.md](https://github.com/alexiscrocilla/turnwatch/blob/main/CONTRIBUTING.md#before-you-open-a-pull-request))
+- [ ] `pnpm check` passes (see [CONTRIBUTING.md](https://github.com/alexiscrocilla/turnwatch/blob/main/CONTRIBUTING.md#before-you-open-a-pull-request)), on Windows and macOS for shared code, or the description says which system was not checked
 - [ ] New user-visible text exists in English and French
 - [ ] A change to `model.rs` is also in `src/types.ts`
 - [ ] Test data is fictional, and nothing private is in the diff

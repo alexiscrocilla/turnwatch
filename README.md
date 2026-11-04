@@ -19,7 +19,7 @@ The rest is in the card's tooltip: branch, uncommitted files, summary of the las
 
 Claude Desktop already notifies about finished turns, so the monitor only sends **reminders**: a session that has been waiting for you for more than 5 minutes with no answer. It stays quiet when the session is visible in a Desktop pane in the foreground, and for a mere "probable question". Several reminders due at the same time form a single notification ("3 sessions are still waiting for you").
 
-It also warns when the plan's quota crosses a threshold: the 5-hour window at 80% then 95%, the week and Fable's weekly share at 90%, with the time left before the reset ("5-hour quota at 82%", "Resets in 1 h 20"). Each threshold is announced once per window, and a threshold already passed when the monitor starts is not announced. These alerts rely on Claude Desktop sampling the quota, which it only does for a few hours after a right-click on its icon (see **Quota** below). A notification therefore tells you when it has stopped: a session is working, you are at the computer, and there has been no sample for 20 minutes ("Quota: sampling stopped"). A pause of more than 10 minutes without touching the keyboard or mouse restarts that count, because Desktop also skips its samples while the computer is idle or locked. It is sent once per stop, and the "Notify the quota" setting turns it off too. With the companion mod (see **Companion mod**), sessions report the quota themselves: this notification has no reason to exist and is not sent.
+It also warns when the plan's quota crosses a threshold: the 5-hour window at 80% then 95%, the week and Fable's weekly share at 90%, with the time left before the reset ("5-hour quota at 82%", "Resets in 1 h 20"). Each threshold is announced once per window, and a threshold already passed when the monitor starts is not announced. These alerts rely on Claude Desktop sampling the quota, which on Windows it only does for a few hours after a right-click on its icon, and on macOS when it opens (see **Quota** below). A notification therefore tells you when it has stopped: a session is working, you are at the computer, and there has been no sample for 20 minutes ("Quota: sampling stopped"). A pause of more than 10 minutes without touching the keyboard or mouse restarts that count, because Desktop also skips its samples while the computer is idle or locked. It is sent once per stop, and the "Notify the quota" setting turns it off too. With the companion mod (see **Companion mod**), sessions report the quota themselves: this notification has no reason to exist and is not sent.
 
 The window, the tray menu, the notifications and the installer are in English and French. They follow the system's display language, and the tray menu lets you choose (see **Usage**).
 
@@ -56,17 +56,20 @@ Everything above works the same way on a Mac, with these differences:
 
 - **Install**: open `Turnwatch_<version>_aarch64.dmg` from the [Releases](https://github.com/alexiscrocilla/turnwatch/releases) page and drag Turnwatch into Applications. The app is not signed by Apple: the first time, macOS refuses to open it. Open it once, then in System Settings > Privacy & Security choose "Open Anyway". The build is for Apple silicon.
 - **Menu bar**: the icon sits in the menu bar, and the app has no Dock icon. A click on the icon shows or hides the window, its menu holds the settings. With **Always on top**, the window also follows you to every Space, a full-screen app's included.
-- **Companion mod**: there is no installer, so the app adds the mod itself each time it starts, with the most recent CLI in `~/Library/Application Support/Claude/claude-code/<version>/<hash>/claude.app`. It first copies the marketplace out of the app, into `~/Library/Application Support/local.turnwatch/companion/`, so that moving the app does not break it. When it is already there and up to date, it only checks. If Claude Desktop has never opened its Code tab, a notification says so; opening the tab once, then starting Turnwatch again, makes up for it. To remove it, run this before deleting the app:
+- **Companion mod**: there is no installer, so the app adds the mod itself each time it starts, with the most recent CLI in `~/Library/Application Support/Claude/claude-code/<version>/<hash>/claude.app`. It first copies the marketplace out of the app, into `~/Library/Application Support/local.turnwatch/companion/`, so that moving the app does not break it. When it is already there and up to date, it only checks. If Claude Desktop has never opened its Code tab, a notification says so; opening the tab once, then starting Turnwatch again, makes up for it. A development build (`pnpm tauri dev`) never adds it.
+- **Open at login** replaces "Start with Windows": a launch agent, `~/Library/LaunchAgents/local.turnwatch.plist`, which runs the app's executable. macOS lists it in System Settings > General > Login Items. Switching it off there keeps the file, so the menu item stays ticked; untick it in Turnwatch's menu instead. It is refused while the app runs from where it was downloaded: move it to Applications first.
+- **Updates**: only an app in `/Applications` or `~/Applications` updates itself. The update is the app itself, in a `.tar.gz`: it is unpacked in a temporary folder, replaces the app in place, then the app restarts. When your account cannot write in that Applications folder, macOS asks for an administrator's password.
+- **Uninstall**: there is no uninstaller. Untick **Open at login**, quit Turnwatch (it would add the mod back at its next start), then remove the mod:
 
   ```bash
   /Applications/Turnwatch.app/Contents/MacOS/turnwatch --uninstall-companion
   ```
 
-- **Open at login** replaces "Start with Windows": a launch agent, `~/Library/LaunchAgents/local.turnwatch.plist`, which runs the app's executable. macOS lists it in System Settings > General > Login Items. Switching it off there keeps the file, so the menu item stays ticked; untick it in Turnwatch's menu instead. It is refused while the app runs from where it was downloaded: move it to Applications first.
-- **Updates**: only an app in `/Applications` or `~/Applications` updates itself. The update replaces the app in place, then restarts it.
+  Then move Turnwatch to the Trash. Its data stays in `~/Library/Application Support/local.turnwatch/`, and the mod's files in `~/.claude/session-monitor/`: delete both folders to leave nothing behind.
 - **`gh` and `git`**: an app opened from the Finder does not get the PATH of your shell. The monitor adds the folders of `/etc/paths` and `/etc/paths.d`, then `/opt/homebrew/bin`, `/usr/local/bin` and `/opt/local/bin`, so a `gh` from Homebrew or MacPorts is found.
 - **Notifications**: they go through macOS' Notification Center, under Turnwatch's name. As on Windows, a click opens the session, or shows the window for a notification about several sessions, as long as the app runs.
-- **Quota**: Claude Desktop samples it when it opens. Without the companion mod, quitting and reopening Desktop takes a new sample.
+- **Quota**: Claude Desktop samples it when it opens. Without the companion mod, quitting and reopening Desktop takes a new sample, and that is what the line under the gauges suggests ("No sample since 08:17: reopen Claude Desktop to take one").
+- **Foreground**: macOS reports apps, not windows, so Desktop counts as in the foreground whenever it is the active app, even through one of its dialogs. A session visible in one of its panes then gets no reminder.
 - **Files**: Desktop's files are in `~/Library/Application Support/Claude/` instead of `%APPDATA%\Claude\`, laid out the same way, and the app's own in `~/Library/Application Support/local.turnwatch/`. `~/.claude` is the same. The registry's `procStart` is a date in UTC to the second (`Tue Nov  3 21:34:47 2026`), checked against the start time macOS gives for the pid.
 - **Language**: "auto" follows the first of the languages listed in System Settings > General > Language & Region.
 
@@ -103,8 +106,8 @@ pnpm tauri dev
 - **Proposed tasks**: the "New task" cards a session proposed, which you have neither started nor dismissed, appear under that session when it is listed, otherwise in their project's group after its sessions, dashed ("proposed · 2 h"), with their pitch on the second line. Only one at a time asks for your attention, per family of sessions or per project: the newest. The others wait behind a row ("2 proposed tasks") that a click unfolds. A task also goes there once you have written twice to its session since it was proposed without starting it: it then no longer counts among the announced tasks. A click on the card opens the session that proposed it: that is where, in Desktop, you start or dismiss the card, as no link can do it from outside. The cross ("Not for me") hides the task in the monitor only, and Desktop keeps it. That choice is remembered in the window. A card is shown for 7 days after it was proposed: that is the lifetime Desktop gives its proposals, and the monitor applies it to old cards too, which Desktop keeps forever (the tooltip says which of the two rules applies).
 - **Click on a card**: opens that session in Claude Desktop (link `claude://code/continue?session=local_…`, the same as in Desktop's jump list) and marks it as seen.
 - **Click on the PR badge**: opens the PR in the browser. When Desktop's Auto-fix watches the PR (circular arrow), Desktop restarts the session itself if CI fails, on a conflict or on a review comment. While the session works on a red CI or a conflict, the tooltip says "Auto-fix is on it". Desktop only restarts it once per failure: if it waits for you, stops on an error or ends without solving the problem, it is up to you. The state comes from the PR card Desktop keeps for the session, with the same rule as Desktop (PR open, on GitHub, neither dismissed nor inherited from a copied session), and is shown only while Desktop runs.
-- **Notification area icon**: its color follows the most urgent session, and its tooltip gives the summary, then the quota on a second line. A click shows or hides the window. The menu changes the settings, starts the monitor with Windows, checks for updates, picks the language and quits. Hiding the window does not close the app.
-- **Language**: by default the app follows Windows' display language: French if it is French, English otherwise. The **Language** item of the tray menu forces English or French, at once and with no restart. Text that comes from sessions stays in the language it was written in, and button labels already read from a session change at its next message.
+- **Notification area icon** (in the menu bar on macOS): its color follows the most urgent session, and its tooltip gives the summary, then the quota on a second line. A click shows or hides the window. The menu changes the settings, starts the monitor with Windows (opens it at login on macOS), checks for updates, picks the language and quits. Hiding the window does not close the app.
+- **Language**: by default the app follows the system's display language (on macOS, the first of the preferred languages): French if it is French, English otherwise. The **Language** item of the tray menu forces English or French, at once and with no restart. Text that comes from sessions stays in the language it was written in, and button labels already read from a session change at its next message.
 
 ### States
 
@@ -116,7 +119,7 @@ pnpm tauri dev
 | On its feet, a tool in hand | Working | Claude is working, or has finished its turn and waits for background work that will start it again. |
 | Grey, eyes closed | Idle | Nothing running, already seen. |
 
-While working, the character holds what the session is doing: a pen for an edit, a wrench for a command, a magnifying glass for a read or a search, a globe for the web, and a small crab joins it when it starts a sub-agent. It takes one step per tool call and does not move between two: there is no continuous animation, which would keep WebView2 busy all day. The step is dropped if Windows asks to reduce animations.
+While working, the character holds what the session is doing: a pen for an edit, a wrench for a command, a magnifying glass for a read or a search, a globe for the web, and a small crab joins it when it starts a sub-agent. It takes one step per tool call and does not move between two: there is no continuous animation, which would keep the web view busy all day. The step is dropped when the system asks to reduce motion (animation effects turned off in Windows, **Reduce motion** on macOS).
 
 With the companion mod, a mini crab appears after the title for each running sub-agent: three at most, the others counted beside them. The tooltip says what they are working on.
 
@@ -152,11 +155,11 @@ These internal formats change with the versions of Claude Code and Desktop. The 
 cargo run --manifest-path crates/monitor-core/Cargo.toml --bin dump -- --summary
 ```
 
-`--watch` prints each change continuously; with no option, the command prints the full snapshot as JSON. This output holds your session titles and folder paths: read it before you share it.
+`--watch` prints each change continuously, and `--all` adds the sessions started outside Claude Desktop; with no option, the command prints the full snapshot as JSON. This output holds your session titles and folder paths: read it before you share it.
 
 ## Settings
 
-They can be changed from the icon's menu and are saved in `%APPDATA%\local.turnwatch\settings.json`:
+They can be changed from the icon's menu and are saved in `%APPDATA%\local.turnwatch\settings.json` (on macOS, `~/Library/Application Support/local.turnwatch/settings.json`):
 
 | Key | Default | Effect |
 |---|---|---|
@@ -170,9 +173,11 @@ They can be changed from the icon's menu and are saved in `%APPDATA%\local.turnw
 | `compact` | `false` | Compact mode |
 | `alwaysOnTop` | `true` | Window always on top |
 | `autoUpdate` | `true` | Installs new versions on its own (see **Updates**) |
-| `language` | `"auto"` | `"en"`, `"fr"`, or `"auto"` to follow Windows |
+| `language` | `"auto"` | `"en"`, `"fr"`, or `"auto"` to follow the system |
 
 ## What the app writes on the machine
+
+On Windows:
 
 - `%APPDATA%\local.turnwatch\`: `settings.json`, `acks.json` (sessions already seen), and the window's position and size. During an update of a hidden window, also `update-stay-hidden`, gone once the app has restarted.
 - `%TEMP%\Turnwatch-<version>-updater-…\`: the installer of each update, which stays there until Windows cleans the folder.
@@ -189,9 +194,17 @@ The installer also writes:
 
 Uninstalling removes all of that, as well as the mod, its marketplace, the start with Windows and the notification identity. Only the `HKCU\Software\Alexis Crocilla\Turnwatch` key stays, where it notes that start with Windows was ticked, to restore it on reinstalling. If Claude Desktop has already been uninstalled, the mod also stays in `~\.claude`, for lack of a `claude.exe` to remove it. Ticking "Delete the application data" also erases that key, `%APPDATA%\local.turnwatch\`, `%LOCALAPPDATA%\local.turnwatch\` and `~\.claude\session-monitor\`.
 
+On macOS, where the app does the installer's work itself when it starts:
+
+- `~/Library/Application Support/local.turnwatch/`: `settings.json`, `acks.json`, the window's position and size, `update-stay-hidden` during an update of a hidden window, and in `companion/` the copy of the mod's local marketplace.
+- `~/.claude/settings.json` and `~/.claude/plugins/`, through Desktop's `claude`: the `turnwatch` marketplace and the mod, enabled for all sessions.
+- Only if **Open at login** is ticked: `~/Library/LaunchAgents/local.turnwatch.plist`.
+
+macOS keeps the notification permission itself, under Turnwatch in System Settings > Notifications. As on Windows, only the companion mod writes in `~/.claude/session-monitor/`. There is no uninstaller: **Uninstall** under **macOS** says what to remove.
+
 ## Companion mod
 
-`mod/turnwatch-companion` is a Claude Code mod, added by the installer. Without it, everything works as described above, with Desktop as the only source of the quota. With it, each session writes what Claude Code's engine already knows, with no extra network call and without reading any credential:
+`mod/turnwatch-companion` is a Claude Code mod, added by the installer (on macOS, by the app when it starts). Without it, everything works as described above, with Desktop as the only source of the quota. With it, each session writes what Claude Code's engine already knows, with no extra network call and without reading any credential:
 
 - `quota.json`: the percentage and exact reset time of the 5-hour and 7-day windows, and of Fable's weekly share once Claude Code reports it to mods, after each turn and at each point gained. No more right-click on Desktop's icon;
 - `sessions/<id>.json`: the session's running sub-agents, from its first one on. The file stays after the session, empty.
@@ -229,7 +242,10 @@ crates/monitor-core/   Logic, with no dependency on Tauri
   src/bin/dump.rs      Command-line diagnostic tool
 src-tauri/             Window, icon, notifications, commands
   installer-hooks.nsh  What the installer does beyond copying the app
+  tauri.macos.conf.json  macOS bundle: app and disk image, macOS 13 or later
+  Info.plist           macOS: a menu bar app, with no Dock icon
   src/updater.rs       Updates from the GitHub releases
+  src/autostart.rs     Start with Windows, or open at login on macOS
   src/companion_install.rs  Adding and removing the mod, called by the installer (at start on macOS)
 src/                   Interface (TypeScript with no framework)
   i18n.ts              English and French text of the window

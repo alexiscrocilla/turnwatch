@@ -22,7 +22,7 @@ body:
     id: monitor
     attributes:
       label: Turnwatch version
-      placeholder: "0.1.0"
+      placeholder: "0.3.1"
     validations:
       required: true
   - type: input
@@ -37,15 +37,15 @@ body:
     id: claude-code
     attributes:
       label: Claude Code version
-      description: The folder name under %APPDATA%\Claude\claude-code.
+      description: The folder name under %APPDATA%\Claude\claude-code (on macOS, ~/Library/Application Support/Claude/claude-code).
       placeholder: "2.1.309"
     validations:
       required: true
   - type: input
-    id: windows
+    id: system
     attributes:
-      label: Windows version
-      placeholder: "Windows 11 24H2"
+      label: Windows or macOS version
+      placeholder: "Windows 11 24H2, or macOS 15.1"
   - type: dropdown
     id: companion
     attributes:
